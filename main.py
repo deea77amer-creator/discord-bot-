@@ -15,9 +15,9 @@ def keep_alive():
     t = Thread(target=run_web)
     t.start()
 
-# --- إعداد البوت والبادئة (!) ---
+# --- إعداد البوت ---
 intents = discord.Intents.default()
-intents.members = True          # تفعيل تتبع الأعضاء
+intents.members = True
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -35,20 +35,6 @@ def load_data(file):
 def save_data(data, file):
     with open(file, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-
-# --- دالة التحقق من تخصيص القناة لأي أمر ---
-def check_channel(command_name):
-    async def predicate(ctx):
-        config = load_data(CONFIG_FILE)
-        guild_id = str(ctx.guild.id)
-        allowed_channel = config.get(guild_id, {}).get(f"{command_name}_channel")
-        
-        if allowed_channel and ctx.channel.id != allowed_channel:
-            channel_obj = ctx.guild.get_channel(allowed_channel)
-            await ctx.send(f"❌ هذا الأمر مخصص فقط لقناة {channel_obj.mention if channel_obj else 'القناة المحددة'}.")
-            return False
-        return True
-    return commands.check(predicate)
 
 # --- الأحداث (Events) ---
 
@@ -88,9 +74,44 @@ async def on_member_remove(member):
     stats[guild_id][user_id]["leaves"] += 1
     save_data(stats, DATA_FILE)
 
-# --- الأوامر الإدارية والتحديد ---
+# 📌 التقاط الرسائل العادية بدون رموز (! أو /)
+@bot.event
+async def on_message(message):
+    # تجنب رد البوت على نفسه
+    if message.author.bot:
+        return
 
-# 📌 1. أمر تحديد قناة الترحيب
+    text = message.content.strip().lower()
+
+    # إذا كانت الكلمة هي "سجل" أو "السجل"
+    if text in ["سجل", "السجل"]:
+        guild_id = str(message.guild.id)
+        config = load_data(CONFIG_FILE)
+        allowed_channel = config.get(guild_id, {}).get("سجل_channel")
+
+        # التحقق مما إذا كان تم تحديد قناة ومطابقتها
+        if allowed_channel and message.channel.id != allowed_channel:
+            channel_obj = message.guild.get_channel(allowed_channel)
+            await message.channel.send(f"❌ كلمة السجل تعمل فقط في قناة {channel_obj.mention if channel_obj else 'القناة المخصصة'}.")
+            return
+
+        # عرض السجل
+        target = message.author
+        stats = load_data(DATA_FILE)
+        user_stats = stats.get(guild_id, {}).get(str(target.id), {"joins": 0, "leaves": 0})
+        
+        embed = discord.Embed(title=f"📊 سجل: {target.display_name}", color=discord.Color.blue())
+        embed.set_thumbnail(url=target.display_avatar.url)
+        embed.add_field(name="📥 مرات الدخول", value=f"**{user_stats['joins']}** مرة", inline=True)
+        embed.add_field(name="📤 مرات الخروج", value=f"**{user_stats['leaves']}** مرة", inline=True)
+        
+        await message.channel.send(embed=embed)
+
+    # معالجة الأوامر الإدارية إن وجدت
+    await bot.process_commands(message)
+
+# --- الأوامر الإدارية للتحديد فقط ---
+
 @bot.command(name="ترحيب")
 @commands.has_permissions(administrator=True)
 async def set_welcome_channel(ctx):
@@ -99,9 +120,8 @@ async def set_welcome_channel(ctx):
     if guild_id not in config: config[guild_id] = {}
     config[guild_id]["welcome_channel"] = ctx.channel.id
     save_data(config, CONFIG_FILE)
-    await ctx.send(f"✅ تم تحديد هذه القناة ({ctx.channel.mention}) للترحيب بالأعضاء!")
+    await ctx.send(f"✅ تم تحديد هذه القناة ({ctx.channel.mention}) للترحيب!")
 
-# 📌 2. أمر تحديد قناة أمر السجل
 @bot.command(name="حدد_سجل")
 @commands.has_permissions(administrator=True)
 async def set_stats_channel(ctx):
@@ -110,29 +130,7 @@ async def set_stats_channel(ctx):
     if guild_id not in config: config[guild_id] = {}
     config[guild_id]["سجل_channel"] = ctx.channel.id
     save_data(config, CONFIG_FILE)
-    await ctx.send(f"✅ تم تخصيص **أمر السجل** ليعمل في هذه القناة فقط: {ctx.channel.mention}")
-
-# --- الأوامر العادية ---
-
-# 📌 3. أمر السجل (مربوط بقناته المخصصة)
-@bot.command(name="سجل")
-@check_channel("سجل")
-async def show_stats(ctx, user: discord.Member = None):
-    target = user or ctx.author
-    guild_id = str(ctx.guild.id)
-    stats = load_data(DATA_FILE)
-    user_stats = stats.get(guild_id, {}).get(str(target.id), {"joins": 0, "leaves": 0})
-    
-    embed = discord.Embed(title=f"📊 سجل: {target.display_name}", color=discord.Color.blue())
-    embed.set_thumbnail(url=target.display_avatar.url)
-    embed.add_field(name="📥 مرات الدخول", value=f"**{user_stats['joins']}** مرة", inline=True)
-    embed.add_field(name="📤 مرات الخروج", value=f"**{user_stats['leaves']}** مرة", inline=True)
-    
-    await ctx.send(embed=embed)
-
-# -------------------------------------------------------------
-# ⬇️ أي أمر جديد مستقبلاً ضفه هنا فوق سطر keep_alive() ⬇️
-# -------------------------------------------------------------
+    await ctx.send(f"✅ تم تخصيص قناة السجل: {ctx.channel.mention}")
 
 # --- تشغيل ---
 keep_alive()
