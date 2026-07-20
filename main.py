@@ -318,12 +318,16 @@ async def on_message(message):
                 await message.channel.send(f"🏆 بطل الرياضيات يا {msg.author.mention}! ربحت **30 نقطة**!")
 
     await bot.process_commands(message)
-# دالة تحميل الملفات الخارجية
+# دالة تحميل الملفات الخارجية تلقائياً
 async def load_extensions():
-    try:
-        await bot.load_extension("commands")
-    except Exception:
-        pass
+    for filename in os.listdir("./"):
+        if filename.endswith(".py") and filename != "main.py":
+            extension_name = filename[:-3]
+            try:
+                await bot.load_extension(extension_name)
+            except Exception as e:
+                pass
+
 
 if __name__ == "__main__":
     keep_alive()
