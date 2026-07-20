@@ -37,8 +37,12 @@ class MyBot(commands.Bot):
         if os.path.exists('./cogs'):
             for filename in os.listdir('./cogs'):
                 if filename.endswith('.py'):
-                    await self.load_extension(f'cogs.{filename[:-3]}')
-                    print(f"تم تحميل الملف بنجاح: {filename}")
+                    cog_name = f'cogs.{filename[:-3]}'
+                    try:
+                        await self.load_extension(cog_name)
+                        print(f"تم تحميل الملف بنجاح: {filename}")
+                    except commands.errors.ExtensionAlreadyLoaded:
+                        pass
 
     async def on_ready(self):
         print(f"البوت جاهز ومتصل بقاعدة البيانات المحلية باسم: {self.user}")
@@ -145,9 +149,7 @@ def save_config_key(guild_id, key, value):
     conn.commit()
     conn.close()
 
-# --- تم دمج رسالة الاتجاه الخاصة بـ on_ready داخل الـ setup_hook لتجنب التكرار ---
-
-# --- نظام الترحيب والمغادرة ---
+# --- نظام الترحيب والمغادرة (الأساسي) ---
 @bot.event
 async def on_member_join(member):
     guild_id = str(member.guild.id)
@@ -688,7 +690,7 @@ class DuelView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=None)
 
 
-# --- معالجة الأوامر والرسائل والألعاب ---
+# --- معالجة الأوامر والرسائل والألعاب (تم تنظيفها وحصرها بالنقاط والتوب والألعاب) ---
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -700,49 +702,8 @@ async def on_message(message):
     user_id = str(message.author.id)
     config = get_config(guild_id)
 
-    # أمر دخول
-    if text_lower == "دخول":
-        if config.get("records_channel") and message.channel.id != config["records_channel"]:
-            await message.delete()
-            return
-        today = datetime.now().strftime("%Y-%m-%d")
-        data = get_user_data(guild_id, user_id)
-        if data["last_checkin"] == today:
-            await message.channel.send(f"⚠️ يا {message.author.mention}، سجلت دخولك اليوم مسبقاً!")
-        else:
-            cnt = data["checkins_count"] + 1
-            update_user_data(guild_id, user_id, last_checkin=today, checkins_count=cnt)
-            await message.channel.send(f"📥 **تم تسجيل الحضور** يا {message.author.mention}!\nالمجموع: **{cnt}**")
-
-    # أمر خروج
-    elif text_lower == "خروج":
-        if config.get("records_channel") and message.channel.id != config["records_channel"]:
-            await message.delete()
-            return
-        today = datetime.now().strftime("%Y-%m-%d")
-        data = get_user_data(guild_id, user_id)
-        if data["last_leave"] == today:
-            await message.channel.send(f"⚠️ يا {message.author.mention}، سجلت خروجك اليوم مسبقاً!")
-        else:
-            cnt = data["manual_leaves_count"] + 1
-            update_user_data(guild_id, user_id, last_leave=today, manual_leaves_count=cnt)
-            await message.channel.send(f"📤 **تم تسجيل الخروج** يا {message.author.mention}!\nالمجموع: **{cnt}**")
-
-    # أمر سجل
-    elif text_lower.startswith("سجل"):
-        if config.get("records_channel") and message.channel.id != config["records_channel"]:
-            await message.delete()
-            return
-        target = message.mentions[0] if message.mentions else message.author
-        data = get_user_data(guild_id, target.id)
-        embed = discord.Embed(title=f"📊 سجل الحضور لـ {target.display_name}", color=discord.Color.green())
-        embed.set_thumbnail(url=target.display_avatar.url)
-        embed.add_field(name="📥 الدخول", value=f"**{data['checkins_count']}**", inline=False)
-        embed.add_field(name="📤 الخروج", value=f"**{data['manual_leaves_count']}**", inline=False)
-        await message.channel.send(embed=embed)
-
     # أمر نقاطي
-    elif text_lower == "نقاطي":
+    if text_lower == "نقاطي":
         data = get_user_data(guild_id, user_id)
         await message.channel.send(f"💰 رصيدك الحالي يا {message.author.mention}: **{data['points']}** نقطة.")
 
