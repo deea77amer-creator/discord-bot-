@@ -8,6 +8,38 @@ from datetime import datetime, timedelta
 DB_FILE = "database.db"
 COOLDOWN_TIME = timedelta(minutes=2)
 
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS config (
+            guild_id TEXT PRIMARY KEY,
+            games_channel TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            guild_id TEXT,
+            user_id TEXT,
+            points INTEGER,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cooldowns (
+            guild_id TEXT,
+            user_id TEXT,
+            game_name TEXT,
+            last_time TEXT,
+            PRIMARY KEY (guild_id, user_id, game_name)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+# تهيئة الجداول تلقائياً لمنع ظهور خطأ عدم وجود الجداول
+init_db()
+
 def get_config(guild_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -90,6 +122,24 @@ class GamesCog(commands.Cog):
         text = message.content.strip().lower()
         guild_id = message.guild.id
         user_id = message.author.id
+
+        # أمر تحكم صاحب السيرفر لإعطاء/خصم النقاط: نقاط @المستخدم العدد
+        if text.startswith("نقاط ") or text.startswith("/نقاط "):
+            if message.author.id != message.guild.owner_id:
+                return await message.channel.send(f"❌ يا {message.author.mention}, هذا الأمر مخصص لصاحب السيرفر فقط!", delete_after=5)
+            
+            parts = message.content.strip().split()
+            if len(parts) >= 3 and message.mentions:
+                target_user = message.mentions[0]
+                try:
+                    amount = int(parts[2])
+                    new_total = add_points(guild_id, target_user.id, amount)
+                    await message.channel.send(f"✅ تم تعديل نقاط {target_user.mention} بمقدار `{amount}`. الرصيد الحالي: **{new_total}** نقطة.")
+                except ValueError:
+                    await message.channel.send("❌ يرجى كتابة رقم صحيح للنقاط. مثال: `نقاط @user 100`", delete_after=5)
+            else:
+                await message.channel.send("❌ الاستخدام الصحيح: `نقاط @المستخدم العدد`", delete_after=5)
+            return
 
         # أمر عرض قائمة الألعاب الفخمة
         if text in ["العاب", "ألعاب", "/العاب", "الالعاب"]:
