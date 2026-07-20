@@ -27,7 +27,23 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+# --- تم تعديل البوت ليصبح كلاس يدعم تحميل الملفات تلقائياً ---
+class MyBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+
+    async def setup_hook(self):
+        # تحميل الملفات تلقائياً من مجلد cogs إن وجد
+        if os.path.exists('./cogs'):
+            for filename in os.listdir('./cogs'):
+                if filename.endswith('.py'):
+                    await self.load_extension(f'cogs.{filename[:-3]}')
+                    print(f"تم تحميل الملف بنجاح: {filename}")
+
+    async def on_ready(self):
+        print(f"البوت جاهز ومتصل بقاعدة البيانات المحلية باسم: {self.user}")
+
+bot = MyBot()
 
 # --- نظام قاعدة البيانات المحلية SQLite (حفظ دائم) ---
 DB_FILE = "database.db"
@@ -129,9 +145,7 @@ def save_config_key(guild_id, key, value):
     conn.commit()
     conn.close()
 
-@bot.event
-async def on_ready():
-    print(f"البوت جاهز ومتصل بقاعدة البيانات المحلية باسم: {bot.user}")
+# --- تم دمج رسالة الاتجاه الخاصة بـ on_ready داخل الـ setup_hook لتجنب التكرار ---
 
 # --- نظام الترحيب والمغادرة ---
 @bot.event
