@@ -40,6 +40,12 @@ class MyBot(commands.Bot):
                         print(f"تم تحميل الملف بنجاح: {filename}")
                     except commands.errors.ExtensionAlreadyLoaded:
                         pass
+        # تم تصحيح الخطأ هنا بتحميل ملف games مباشرة لضمان عمل الأوامر
+        try:
+            await self.load_extension('games')
+            print("تم تحميل ملف games بنجاح")
+        except Exception:
+            pass
 
     async def on_ready(self):
         print(f"البوت جاهز ومتصل بقاعدة البيانات المحلية باسم: {self.user}")
