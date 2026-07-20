@@ -34,7 +34,6 @@ def init_db():
             PRIMARY KEY (guild_id, user_id, game_name)
         )
     """)
-    # جدول أسعار المزاد الحالية لكل سيرفر
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS market_prices (
             guild_id TEXT,
@@ -43,7 +42,6 @@ def init_db():
             PRIMARY KEY (guild_id, item_name)
         )
     """)
-    # جدول ممتلكات المستخدمين من المزاد
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_inventory (
             guild_id TEXT,
@@ -56,7 +54,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# تهيئة الجداول تلقائياً لمنع ظهور خطأ عدم وجود الجداول
 init_db()
 
 def get_config(guild_id):
@@ -65,7 +62,9 @@ def get_config(guild_id):
     cursor.execute("SELECT games_channel FROM config WHERE guild_id = ?", (str(guild_id),))
     row = cursor.fetchone()
     conn.close()
-    return int(row[0]) if (row and row[0]) else None
+    if row and row[0]:
+        return int(row[0])
+    return 1528588181371490344
 
 def get_user_data(guild_id, user_id):
     conn = sqlite3.connect(DB_FILE)
@@ -116,7 +115,6 @@ def set_cooldown(guild_id, user_id, game_name):
     conn.commit()
     conn.close()
 
-# --- إدارة أسعار وممتلكات المزاد ---
 BASE_MARKET_ITEMS = {
     "سيف أسطوري": 300,
     "درع الماس": 250,
@@ -134,12 +132,10 @@ def update_and_get_market_prices(guild_id):
     
     current_prices = {row[0]: row[1] for row in rows}
     
-    # تحديث أو إنشاء الأسعار عشوائياً (ترتفع أو ترخص)
     for item, base_price in BASE_MARKET_ITEMS.items():
         if item not in current_prices:
             current_prices[item] = base_price
         else:
-            # تغيّر بنسبة تتراوح بين -20% إلى +25%
             change_percent = random.uniform(-0.20, 0.25)
             new_price = int(current_prices[item] * (1 + change_percent))
             if new_price < 20: 
@@ -185,8 +181,6 @@ def remove_from_inventory(guild_id, user_id, item_name, qty):
     conn.close()
     return True
 
-# --- تعريف الـ 26 لعبة تفاعلية ---
-
 class GamesCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -214,7 +208,6 @@ class GamesCog(commands.Cog):
         guild_id = message.guild.id
         user_id = message.author.id
 
-        # أمر تعيين قناة الألعاب لصاحب السيرفر: تعيين_قناة_الالعاب #القناة
         if text.startswith("تعيين_قناة_الالعاب") or text.startswith("/تعيين_قناة_الالعاب"):
             if message.author.id != message.guild.owner_id:
                 return await message.channel.send(f"❌ يا {message.author.mention}, هذا الأمر لمالك السيرفر فقط!", delete_after=5)
@@ -230,7 +223,6 @@ class GamesCog(commands.Cog):
                 await message.channel.send("❌ يرجى منشنة القناة المطلوبة. مثال: `تعيين_قناة_الالعاب #العاب`", delete_after=5)
             return
 
-        # أمر تحكم صاحب السيرفر لإعطاء/خصم النقاط: نقاط @المستخدم العدد
         if text.startswith("نقاط ") or text.startswith("/نقاط "):
             if message.author.id != message.guild.owner_id:
                 return await message.channel.send(f"❌ يا {message.author.mention}, هذا الأمر مخصص لصاحب السيرفر فقط!", delete_after=5)
@@ -248,7 +240,6 @@ class GamesCog(commands.Cog):
                 await message.channel.send("❌ الاستخدام الصحيح: `نقاط @المستخدم العدد`", delete_after=5)
             return
 
-        # أمر أسعار المزاد (لمعرفة أسعار الأشياء وكيف ترتفع وترخص)
         if text in ["اسعار", "الأسعار", "/اسعار", "أسعار"]:
             prices = update_and_get_market_prices(guild_id)
             embed = discord.Embed(
@@ -262,7 +253,6 @@ class GamesCog(commands.Cog):
             await message.channel.send(embed=embed)
             return
 
-        # أمر شراء من المزاد: شراء <اسم الغرض>
         if text.startswith("شراء ") or text.startswith("/شراء "):
             parts = message.content.strip().split(maxsplit=1)
             if len(parts) < 2:
@@ -289,7 +279,6 @@ class GamesCog(commands.Cog):
             await message.channel.send(f"🎉 مبروك! اشتريت **{matched_item}** بقيمة `{cost}` نقطة بنجاح.")
             return
 
-        # أمر ممتلكات (لعرض كم شيء شريته من المزاد)
         if text in ["ممتلكات", "/ممتلكات", "حقيبتي", "أغراضي"]:
             inv = get_user_inventory(guild_id, user_id)
             embed = discord.Embed(
@@ -307,8 +296,6 @@ class GamesCog(commands.Cog):
             await message.channel.send(embed=embed)
             return
 
-        # أمر بيع (بيع كامل، بيع نص، أو حسب العدد)
-        # الصيغ المتوقعة: بيع <الغرض> كامل | بيع <الغرض> نص | بيع <الغرض> <العدد> | بيع كل شيء
         if text.startswith("بيع ") or text.startswith("/بيع "):
             parts = message.content.strip().split()
             if len(parts) < 2:
@@ -318,18 +305,15 @@ class GamesCog(commands.Cog):
             if not inv:
                 return await message.channel.send("❌ ليس لديك أي ممتلكات لتبيعها!", delete_after=5)
             
-            # محاولة مطابقة اسم الغرض من الحقيبة
             matched_item = None
             query_str = " ".join(parts[1:-1]).lower()
             last_arg = parts[-1].lower()
             
-            # فحص إذا كان الغرض يتكون من كلمة واحدة أو أكثر
             for itm in inv.keys():
                 if message.content.strip().lower().contains(itm.lower()) or query_str in itm.lower():
                     matched_item = itm
                     break
             
-            # تبسيط عملية البحث إذا فشلت المطابقة الجزئية
             if not matched_item:
                 for itm in inv.keys():
                     if parts[1].lower() in itm.lower():
@@ -352,7 +336,6 @@ class GamesCog(commands.Cog):
                 try:
                     sell_qty = int(last_arg)
                 except ValueError:
-                    # لو كتب أمر بيع الغرض مباشرة بدون تحديد كمية (يفترض 1)
                     sell_qty = 1
             
             if sell_qty > owned_qty or sell_qty <= 0:
@@ -362,7 +345,6 @@ class GamesCog(commands.Cog):
             if not success:
                 return await message.channel.send("❌ حدث خطأ أثناء إتمام عملية البيع.", delete_after=5)
             
-            # سعر البيع يعتمد على سعر السوق الحالي (مثلاً 80% من قيمة الشراء الحالية)
             total_earned = int(unit_price * 0.8 * sell_qty)
             if total_earned < 1: 
                 total_earned = sell_qty * 10
@@ -371,7 +353,6 @@ class GamesCog(commands.Cog):
             await message.channel.send(f"💸 تم بيع `{sell_qty}` من **{matched_item}** بنجاح واسترداد **{total_earned}** نقطة! الرصيد الحالي: **{new_tot}** نقطة.")
             return
 
-        # أمر عرض قائمة الألعاب الفخمة
         if text in ["العاب", "ألعاب", "/العاب", "الالعاب"]:
             embed = discord.Embed(
                 title="✨ قَائِمَة أَعَالِي الأَلْعَابِ وَالتَّحَدِّيَاتِ ✨",
@@ -403,48 +384,40 @@ class GamesCog(commands.Cog):
                             "🧙‍♂️ `سحر` - إتقان التعويذات السحرية\n"
                             "🌋 `بركان` - الهروب الأخير من الحمم\n\n"
                             "💡 *ملاحظة: اكتب اسم اللعبة مباشرة في الشات لبدء اللعب!*",
-                color=discord.Color.from_rgb(212, 175, 55) # لون ذهبي فخم
+                color=discord.Color.from_rgb(212, 175, 55)
             )
             embed.set_footer(text="🌟 استمتع بقضاء أوقات ممتعة واربح النقاط!", icon_url=message.author.display_avatar.url)
             await message.channel.send(embed=embed)
             return
 
-        # 1. عجلة الحظ
         if text == "عجلة":
             if not self.can_play(guild_id, user_id, "wheel", message): return
             await message.channel.send(embed=discord.Embed(title="🎡 عجلة الحظ الكبرى", description=f"يا {message.author.mention}, اضغط للتدوير:", color=discord.Color.gold()), view=WheelView(guild_id, user_id))
         
-        # 2. النرد
         elif text in ["نرد", "زهر"]:
             if not self.can_play(guild_id, user_id, "dice", message): return
             await message.channel.send(embed=discord.Embed(title="🎲 تحدي النرد", description=f"يا {message.author.mention}, اضغط للرمي:", color=discord.Color.blue()), view=DiceView(guild_id, user_id))
         
-        # 3. الصناديق
         elif text == "صناديق":
             if not self.can_play(guild_id, user_id, "boxes", message): return
             await message.channel.send(embed=discord.Embed(title="📦 فتح الصناديق", description=f"يا {message.author.mention}, اختر صندوقاً:", color=discord.Color.purple()), view=BoxesView(guild_id, user_id))
         
-        # 4. مقص
         elif text in ["مقص", "حجر ورقة مقص"]:
             if not self.can_play(guild_id, user_id, "rps", message): return
             await message.channel.send(embed=discord.Embed(title="✂️ حجر ورقة مقص", description=f"يا {message.author.mention}, اختر سلاحك:", color=discord.Color.teal()), view=RpsView(guild_id, user_id))
         
-        # 5. تخمين
         elif text == "تخمين":
             if not self.can_play(guild_id, user_id, "guess", message): return
             await message.channel.send(embed=discord.Embed(title="🔢 تخمين الرقم (من 1 إلى 5)", description=f"يا {message.author.mention}, خمن الرقم:", color=discord.Color.dark_blue()), view=GuessView(guild_id, user_id))
         
-        # 6. حظك
         elif text == "حظك":
             if not self.can_play(guild_id, user_id, "luck", message): return
             await message.channel.send(embed=discord.Embed(title="🔮 حظك اليوم", description=f"يا {message.author.mention}, اكتشف حظك:", color=discord.Color.magenta()), view=LuckView(guild_id, user_id))
         
-        # 7. تحدي السرعة
         elif text == "تحدي السرعة":
             if not self.can_play(guild_id, user_id, "speed", message): return
             await message.channel.send(embed=discord.Embed(title="⚡ تحدي السرعة", description=f"يا {message.author.mention}, اضغط الآن:", color=discord.Color.red()), view=SpeedView(guild_id, user_id))
         
-        # 8. حساب
         elif text == "حساب":
             if not self.can_play(guild_id, user_id, "math", message): return
             n1, n2 = random.randint(1, 20), random.randint(1, 20)
@@ -453,92 +426,74 @@ class GamesCog(commands.Cog):
             fake_res = res if is_true else res + random.choice([-2, 2, 3])
             await message.channel.send(embed=discord.Embed(title="🧮 لعبة الحساب السريع", description=f"يا {message.author.mention}, هل المعادلة صحيحة؟\n**{n1} + {n2} = {fake_res}**", color=discord.Color.orange()), view=MathView(guild_id, user_id, is_true))
         
-        # 9. كنز
         elif text == "كنز":
             if not self.can_play(guild_id, user_id, "treasure", message): return
             await message.channel.send(embed=discord.Embed(title="💎 الكنز المفقود", description=f"يا {message.author.mention}, ابدأ الحفر:", color=discord.Color.gold()), view=TreasureView(guild_id, user_id))
         
-        # 10. بلنتي
         elif text == "بلنتي":
             if not self.can_play(guild_id, user_id, "penalty", message): return
             await message.channel.send(embed=discord.Embed(title="⚽ ركلة جزاء", description=f"يا {message.author.mention}, اختر زاوية التسديد:", color=discord.Color.green()), view=PenaltyView(guild_id, user_id))
         
-        # 11. سلة
         elif text == "سلة":
             if not self.can_play(guild_id, user_id, "basketball", message): return
             await message.channel.send(embed=discord.Embed(title="🏀 كرة السلة", description=f"يا {message.author.mention}, صوب السلة:", color=discord.Color.orange()), view=BasketballView(guild_id, user_id))
         
-        # 12. صيد
         elif text == "صيد":
             if not self.can_play(guild_id, user_id, "fishing", message): return
             await message.channel.send(embed=discord.Embed(title="🎣 صيد السمك", description=f"يا {message.author.mention}, ارمِ الصنارة:", color=discord.Color.blue()), view=FishingView(guild_id, user_id))
         
-        # 13. سيارات
         elif text == "سيارات":
             if not self.can_play(guild_id, user_id, "racing", message): return
             await message.channel.send(embed=discord.Embed(title="🏎️ سباق السيارات", description=f"يا {message.author.mention}, انطلق بالسباق:", color=discord.Color.dark_red()), view=RacingView(guild_id, user_id))
         
-        # 14. تعدين
         elif text == "تعدين":
             if not self.can_play(guild_id, user_id, "mining", message): return
             await message.channel.send(embed=discord.Embed(title="⛏️ التعدين", description=f"يا {message.author.mention}, ابدأ التنقيب:", color=discord.Color.dark_gray()), view=MiningView(guild_id, user_id))
         
-        # 15. مبارزة
         elif text == "مبارزة":
             if not self.can_play(guild_id, user_id, "duel", message): return
             await message.channel.send(embed=discord.Embed(title="⚔️ ساحة المبارزة", description=f"يا {message.author.mention}, ادخل المعركة:", color=discord.Color.blurple()), view=DuelView(guild_id, user_id))
 
-        # 16. بولينج
         elif text == "بولينج":
             if not self.can_play(guild_id, user_id, "bowling", message): return
             await message.channel.send(embed=discord.Embed(title="🎳 البولينج", description=f"يا {message.author.mention}, ارمِ الكرة:", color=discord.Color.dark_purple()), view=BowlingView(guild_id, user_id))
 
-        # 17. طائرة
         elif text == "طائرة":
             if not self.can_play(guild_id, user_id, "plane", message): return
             await message.channel.send(embed=discord.Embed(title="✈️ الطيران الحربي", description=f"يا {message.author.mention}, اختر المناورة:", color=discord.Color.blue()), view=PlaneView(guild_id, user_id))
 
-        # 18. سفينة
         elif text == "سفينة":
             if not self.can_play(guild_id, user_id, "ship", message): return
             await message.channel.send(embed=discord.Embed(title="🚢 رحلة بحرية", description=f"يا {message.author.mention}, واجه العاصفة:", color=discord.Color.teal()), view=ShipView(guild_id, user_id))
 
-        # 19. سهم
         elif text == "سهم":
             if not self.can_play(guild_id, user_id, "archery", message): return
             await message.channel.send(embed=discord.Embed(title="🏹 الرماية بالسهام", description=f"يا {message.author.mention}, أطلق السهم:", color=discord.Color.gold()), view=ArcheryView(guild_id, user_id))
 
-        # 20. فضاء
         elif text == "فضاء":
             if not self.can_play(guild_id, user_id, "space", message): return
             await message.channel.send(embed=discord.Embed(title="🚀 مغامرة الفضاء", description=f"يا {message.author.mention}, اختر المسار الفضائي:", color=discord.Color.dark_theme), view=SpaceView(guild_id, user_id))
 
-        # 21. قبو
         elif text == "قبو":
             if not self.can_play(guild_id, user_id, "vault", message): return
             await message.channel.send(embed=discord.Embed(title="🔐 فتح القبو السري", description=f"يا {message.author.mention}, اختر الرمز السري:", color=discord.Color.dark_green()), view=VaultView(guild_id, user_id))
 
-        # 22. بوكر
         elif text == "بوكر":
             if not self.can_play(guild_id, user_id, "poker", message): return
             await message.channel.send(embed=discord.Embed(title="🃏 سحب الورق", description=f"يا {message.author.mention}, اسحب بطاقة الحظ:", color=discord.Color.dark_red()), view=PokerView(guild_id, user_id))
 
-        # 23. فخار
         elif text == "فخار":
             if not self.can_play(guild_id, user_id, "pottery", message): return
             await message.channel.send(embed=discord.Embed(title="🏺 صناعة الفخار", description=f"يا {message.author.mention}, شكل التحفة الفنية:", color=discord.Color.orange()), view=PotteryView(guild_id, user_id))
 
-        # 24. جبل
         elif text == "تسلق":
             if not self.can_play(guild_id, user_id, "climb", message): return
             await message.channel.send(embed=discord.Embed(title="🧗‍♂️ تسلق الجبال", description=f"يا {message.author.mention}, اصعد القمة:", color=discord.Color.default()), view=ClimbView(guild_id, user_id))
 
-        # 25. ساحر
         elif text == "سحر":
             if not self.can_play(guild_id, user_id, "magic", message): return
             await message.channel.send(embed=discord.Embed(title="🧙‍♂️ التعويذة السحرية", description=f"يا {message.author.mention}, اختر العصا السحرية:", color=discord.Color.purple()), view=MagicView(guild_id, user_id))
 
-        # 26. بركان
         elif text == "بركان":
             if not self.can_play(guild_id, user_id, "volcano", message): return
             await message.channel.send(embed=discord.Embed(title="🌋 الهروب من البركان", description=f"يا {message.author.mention}, اختر طريق الهروب:", color=discord.Color.red()), view=VolcanoView(guild_id, user_id))
@@ -550,9 +505,6 @@ class GamesCog(commands.Cog):
             return False
         set_cooldown(guild_id, user_id, game_key)
         return True
-
-
-# --- تعريف الأزرار والـ Views للألعاب الـ 26 ---
 
 class WheelView(discord.ui.View):
     def __init__(self, g_id, u_id): super().__init__(timeout=60); self.g, self.u = g_id, u_id
@@ -864,7 +816,6 @@ class VolcanoView(discord.ui.View):
         tot = add_points(self.g, self.u, 60) if win else get_user_data(self.g, self.u)
         desc = f"🏃 هربت من الحمم البركانية وربحت **60** نقطة! (الرصيد: {tot})" if win else "🔥 حاصرتك الحمم البركانية."
         await i.response.edit_message(embed=discord.Embed(title="🌋 البركان", description=desc, color=discord.Color.red()), view=None)
-
 
 async def setup(bot):
     await bot.add_cog(GamesCog(bot))
