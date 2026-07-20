@@ -3,7 +3,8 @@ from discord.ext import commands
 import sqlite3
 from datetime import datetime
 
-DB_FILE = "auth_system.db"
+# تم تعديل اسم قاعدة البيانات لتتصل بالملف المشترك مع الألعاب ولضمان عدم تصفّر النقاط
+DB_FILE = "database.db"
 
 def init_auth_db():
     conn = sqlite3.connect(DB_FILE)
@@ -47,7 +48,7 @@ def update_user_status(guild_id, user_id, action):
     cursor = conn.cursor()
     _, current_points = get_user_status(guild_id, user_id)
     
-    # إضافة نقاط عند تسجيل الدخول كمكافأة (مثلاً 5 نقاط)
+    # إضافة نقاط عند تسجيل الدخول كمكافأة (5 نقاط)
     new_points = current_points
     if action == "دخول":
         new_points += 5
@@ -155,7 +156,7 @@ class AuthCog(commands.Cog):
             embed.add_field(name="📥 مرات الدخول", value=f"`{stats['دخول']}` مرة", inline=True)
             embed.add_field(name="📤 مرات الخروج", value=f"`{stats['خروج']}` مرة", inline=True)
             embed.add_field(name="⭐ رصيد النقاط", value=f"`{current_pts}` نقطة", inline=False)
-            embed.set_footer(text="💡 يتم حفظ النقاط والسجلات بشكل دائم في قاعدة البيانات.")
+            embed.set_footer(text="💡 يتم حفظ النقاط والسجلات بشكل دائم في قاعدة البيانات المشتركة.")
             await message.channel.send(embed=embed)
             return
 
