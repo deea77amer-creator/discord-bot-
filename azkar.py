@@ -1,6 +1,23 @@
+import os
+import json
 import random
 import discord
 from discord.ext import commands, tasks
+
+CONFIG_FILE = "config.json"
+
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return {}
+    return {}
+
+def save_config(data):
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
 AZKAR_LIST = [
     "✨ **أذكار:** لَا إِلَهَ إِلَّا اللَّهُ وَحْدَهُ لَا شَرِيكَ لَهُ، لَهُ الْمُلْكُ وَلَهُ الْحَمْدُ وَهُوَ عَلَى كُلِّ شَيْءٍ قَدِيرٌ.",
@@ -8,35 +25,41 @@ AZKAR_LIST = [
     "🌸 **ذكر:** سُبْحَانَ اللَّهِ وَبِحَمْدِهِ، سُبْحَانَ اللَّهِ الْعَظِيمِ.",
     "🌙 **دعاء:** اللَّهُمَّ إِنِّي أَسْأَلُكَ الْعَفْوَ وَالْعَافِيَةَ فِي الدُّنْيَا وَالْآخِرَةِ.",
     "💎 **ذكر:** استغفر الله العظيم واتوب اليه.",
-    "🍃 **دعاء:** رَبَّنَا آتِنَا فِي الدُّنْيَا حَسَنَةً وَفِي الْآخِرَةِ حَسَنَةً وَقِنَا عَذَابَ النَّارِ.",
-    "✨ **ذكر:** لا حول ولا قوة إلا بالله العلي العظيم.",
-    "🌟 **دعاء:** اللَّهُمَّ أَنْتَ رَبِّي لَا إِلَهَ إِلَّا أَنْتَ، خَلَقْتَنِي وَأَنَا عَبْدُكَ."
+    "🍃 **دعاء:** رَبَّنَا آتِنَا فِي الدُّنْيَا حَسَنَةً وَفِي الْآخِرَةِ حَسَنَةً وَقِنَا عَذَابَ النَّارِ."
 ]
 
 class AutoAzkar(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.azkar_channel_id = None
         self.send_azkar_loop.start()
 
     def cog_unload(self):
         self.send_azkar_loop.cancel()
 
-    @commands.command(name="تحديد_اذكار")        
+    @commands.command(name="تحديد_اذكار")
     @commands.has_permissions(administrator=True)
     async def set_azkar_channel(self, ctx):
-        self.azkar_channel_id = ctx.channel.id
-        await ctx.send(f"✅ تم بنجاح تعيين هذه القناة لإرسال الأدعية والأذكار كل 15 دقيقة.")
+        config = load_config()
+        guild_id = str(ctx.guild.id)
+        if guild_id not in config:
+            config[guild_id] = {}
+        
+        config[guild_id]["azkar_channel"] = ctx.channel.id
+        save_config(config)
+        await ctx.send(f"✅ تم حفظ قناة الأذكار بشكل دائم في هذه القناة.")
 
     @tasks.loop(minutes=15)
     async def send_azkar_loop(self):
-        if not self.azkar_channel_id:
+        config = load_config()
+        if not config:
             return
-        
-        channel = self.bot.get_channel(self.azkar_channel_id)
-        if channel:
-            chosen = random.choice(AZKAR_LIST)
-            await channel.send(f"🕊️ **تذكير إيماني:**\n{chosen}")
+        for guild_id, data in config.items():
+            channel_id = data.get("azkar_channel")
+            if channel_id:
+                channel = self.bot.get_channel(channel_id)
+                if channel:
+                    chosen = random.choice(AZKAR_LIST)
+                    await channel.send(f"🕊️ **تذكير إيماني:**\n{chosen}")
 
     @send_azkar_loop.before_loop
     async def before_azkar_loop(self):
