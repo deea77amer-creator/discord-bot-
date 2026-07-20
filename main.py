@@ -198,6 +198,50 @@ async def on_message(message):
             embed.add_field(name="📤 مرات الخروج", value=f"**{leaves}**", inline=True)
 
             await message.channel.send(embed=embed)
+# نظام الترحيب المخصص والفخم بالأعضاء الجدد
+@bot.event
+async def on_member_join(member):
+    guild_id = str(member.guild.id)
+    user_id = str(member.id)
+    
+    # تحديث إحصائيات العضو في قاعدة البيانات
+    stats = load_data(DATA_FILE)
+    if guild_id not in stats:
+        stats[guild_id] = {}
+    if user_id not in stats[guild_id]:
+        stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "last_join": "", "last_leave": ""}
+        
+    stats[guild_id][user_id]["joins"] += 1
+    save_data(stats, DATA_FILE)
+
+    # التحقق من وجود قناة مخصصة للترحيب والسجل
+    config = load_data(CONFIG_FILE)
+    if guild_id in config and "allowed_channel" in config[guild_id]:
+        channel_id = config[guild_id]["allowed_channel"]
+        channel = member.guild.get_channel(channel_id)
+        if channel:
+            # تصميم رسالة الترحيب الـ Embed الفخمة
+            embed = discord.Embed(
+                title="✨ | وعاد النور إلى السيرفر!",
+                description=f"أهلاً ومرحباً بك يا {member.mention} في سيرفرنا!\n\n"
+                            f"• نورتنا وشرفتنا بانضمامك إلينا ❤️\n"
+                            f"• أنت العضو رقم **{member.guild.member_count}** في عائلتنا.\n"
+                            f"• نتمنى لك أوقاتاً ممتعة ومفيدة معنا، ولا تنس تفقد القوانين!",
+                color=discord.Color.gold()
+            )
+            
+            # وضع صورة العضو الشخصية بشكل جذاب
+            if member.display_avatar:
+                embed.set_thumbnail(url=member.display_avatar.url)
+            
+            # إضافة صورة خلفية أو بانر للسيرفر إذا وجد كإطار جمالي
+            if member.guild.banner:
+                embed.set_image(url=member.guild.banner.url)
+                
+            embed.set_footer(text=f"ID: {member.id} | نظام الترحيب التلقائي", icon_url=member.guild.icon.url if member.guild.icon else None)
+            embed.timestamp = datetime.now()
+
+            await channel.send(content=f"حياك الله {member.mention} 🚀🎉", embed=embed)
 
     await bot.process_commands(message)
 
