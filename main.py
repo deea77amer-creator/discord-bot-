@@ -149,11 +149,11 @@ async def on_message(message):
 
             await message.channel.send(embed=embed)
         # التقاط أزرار أو كلمات الدخول والخروج
-        if text in ["تسجيل دخول", "دخول"]:
+                if text in ["تسجيل دخول", "دخول"]:
             await check_daily_register(message, "join")
             return
 
-        if text in ["تسجيل خروج", "خروج"]:
+                if text in ["تسجيل خروج", "خروج"]:
             await check_daily_register(message, "leave")
             return
 
