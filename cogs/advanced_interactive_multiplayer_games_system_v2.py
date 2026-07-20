@@ -143,7 +143,7 @@ class ChallengeGameAcceptView(discord.ui.View):
         self.amount = amount
         self.guild_id = guild_id
 
-    @discord.ui.button(label="قبول التحدي والتاريخ 🎮", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="قبول التحدي 🎮", style=discord.ButtonStyle.green)
     async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.target.id:
             return await interaction.response.send_message("❌ هذا التحدي ليس لك!", ephemeral=True)
