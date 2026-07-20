@@ -160,7 +160,7 @@ async def set_records(ctx):
     save_data(config, CONFIG_FILE)
     await ctx.send("✅ تم تعيين هذه القناة **لسجلات الحضور** بنجاح!")
 
-# دالة للتحقق من وقت الانتظار (Cooldown) لكل الألعاب
+# دالة للتحقق من وقت الانتظار (Cooldown) لكل لعبة على حدة (دقيقتين)
 COOLDOWN_TIME = timedelta(minutes=2)
 
 def check_cooldown(guild_id, user_id, game_name):
@@ -192,7 +192,7 @@ def set_cooldown(guild_id, user_id, game_name):
     stats[g_id][u_id]["cooldowns"][game_name] = datetime.now().isoformat()
     save_data(stats, DATA_FILE)
 
-# كلاس أزرار عجلة الحظ التفاعلية
+# 1. كلاس أزرار عجلة الحظ التفاعلية
 class WheelView(discord.ui.View):
     def __init__(self, guild_id, user_id):
         super().__init__(timeout=60)
@@ -205,16 +205,16 @@ class WheelView(discord.ui.View):
             await interaction.response.send_message("❌ هذه العجلة ليست لك!", ephemeral=True)
             return
 
-        can_play, rem_time = check_cooldown(self.guild_id, self.user_id, "all_games")
+        can_play, rem_time = check_cooldown(self.guild_id, self.user_id, "wheel")
         if not can_play:
-            await interaction.response.send_message(f"⏳ يا {interaction.user.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب أي لعبة مرة أخرى!", ephemeral=True)
+            await interaction.response.send_message(f"⏳ يا {interaction.user.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب لعبة العجلة مرة أخرى!", ephemeral=True)
             return
 
-        set_cooldown(self.guild_id, self.user_id, "all_games")
+        set_cooldown(self.guild_id, self.user_id, "wheel")
 
-        # أنميشن وهمي لتغيير النص لزيادة الحماس
+        # أنميشن وهمي لزيادة الحماس
         await interaction.response.edit_message(embed=discord.Embed(title="🎡 | عجلة الحظ الكبرى", description="🔄 جاري تدوير العجلة... يرجى الانتظار...", color=discord.Color.gold()), view=None)
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(2.0)
 
         prizes = [10, 25, 50, 100, 200, 0, 500, 50]
         weights = [30, 25, 20, 10, 5, 5, 2, 3]
@@ -229,6 +229,48 @@ class WheelView(discord.ui.View):
         
         await interaction.edit_original_response(embed=embed, view=None)
 
+# 2. كلاس أزرار النرد التفاعلي (بدء رمي النرد)
+class DiceView(discord.ui.View):
+    def __init__(self, guild_id, user_id):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    @discord.ui.button(label="🎲 ارمِ النرد الآن!", style=discord.ButtonStyle.blurple)
+    async def roll_dice(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message("❌ هذا النرد ليس لك!", ephemeral=True)
+            return
+
+        can_play, rem_time = check_cooldown(self.guild_id, self.user_id, "dice")
+        if not can_play:
+            await interaction.response.send_message(f"⏳ يا {interaction.user.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب لعبة النرد مرة أخرى!", ephemeral=True)
+            return
+
+        set_cooldown(self.guild_id, self.user_id, "dice")
+
+        # أنميشن هزة النرد
+        await interaction.response.edit_message(embed=discord.Embed(title="🎲 | تحدي النرد", description="🎲 جاري رج الأكواب ورمي النرد...", color=discord.Color.blue()), view=None)
+        await asyncio.sleep(1.8)
+
+        user_roll = random.randint(1, 6)
+        bot_roll = random.randint(1, 6)
+        
+        embed = discord.Embed(title="🎲 | تحدي النرد", color=discord.Color.blue())
+        embed.add_field(name="رقمك:", value=f"**{user_roll}**", inline=True)
+        embed.add_field(name="رقم البوت:", value=f"**{bot_roll}**", inline=True)
+        
+        if user_roll > bot_roll:
+            total = add_points(self.guild_id, self.user_id, 40)
+            embed.description = f"🏆 مبروك فزت على البوت وربحت **40 نقطة**! (الرصيد: {total})"
+        elif user_roll < bot_roll:
+            embed.description = "❌ فاز البوت عليك! حظاً أوفر."
+        else:
+            total = add_points(self.guild_id, self.user_id, 10)
+            embed.description = f"🤝 تعادلتم! تم منحك **10 نقاط** كمكافأة."
+            
+        await interaction.edit_original_response(embed=embed, view=None)
+
 # كلاس أزرار الصناديق التفاعلية
 class BoxView(discord.ui.View):
     def __init__(self, guild_id, user_id):
@@ -241,12 +283,12 @@ class BoxView(discord.ui.View):
             await interaction.response.send_message("❌ هذا الصندوق ليس لك!", ephemeral=True)
             return
 
-        can_play, rem_time = check_cooldown(self.guild_id, self.user_id, "all_games")
+        can_play, rem_time = check_cooldown(self.guild_id, self.user_id, "boxes")
         if not can_play:
-            await interaction.response.send_message(f"⏳ يا {interaction.user.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب أي لعبة مرة أخرى!", ephemeral=True)
+            await interaction.response.send_message(f"⏳ يا {interaction.user.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تفتح الصناديق مرة أخرى!", ephemeral=True)
             return
 
-        set_cooldown(self.guild_id, self.user_id, "all_games")
+        set_cooldown(self.guild_id, self.user_id, "boxes")
 
         boxes = ["💎 كنز ثمين (150 نقطة)", "🪙 قطعة ذهبية (50 نقطة)", "💨 صندوق فارغ", "💣 قنبلة (-20 نقطة)"]
         weights = [10, 30, 45, 15]
@@ -282,12 +324,12 @@ class RPSView(discord.ui.View):
             await interaction.response.send_message("❌ هذه اللعبة ليست لك!", ephemeral=True)
             return
 
-        can_play, rem_time = check_cooldown(self.guild_id, self.user_id, "all_games")
+        can_play, rem_time = check_cooldown(self.guild_id, self.user_id, "rps")
         if not can_play:
-            await interaction.response.send_message(f"⏳ يا {interaction.user.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب أي لعبة مرة أخرى!", ephemeral=True)
+            await interaction.response.send_message(f"⏳ يا {interaction.user.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب حجر ورقة مقص مرة أخرى!", ephemeral=True)
             return
 
-        set_cooldown(self.guild_id, self.user_id, "all_games")
+        set_cooldown(self.guild_id, self.user_id, "rps")
 
         bot_choice = random.choice(["حجر", "ورقة", "مقص"])
         embed = discord.Embed(title="✂️ | حجر، ورقة، مقص", color=discord.Color.orange())
@@ -320,7 +362,7 @@ class RPSView(discord.ui.View):
 async def send_games_menu(channel):
     embed = discord.Embed(
         title="🎮 | قائمة ألعاب السيرفر الكبرى (15 لعبة تفاعلية)",
-        description="جميع الألعاب تعمل **بدون رموز** مباشرة في الشات المخصص للألعاب:\n",
+        description="جميع الألعاب تعمل **بدون رموز** مباشرة في الشات المخصص للألعاب:\n(ملاحظة: كل لعبة لها وقت انتظار خاص بها مدته دقيقتان عند لعبها)\n",
         color=discord.Color.blue()
     )
     embed.add_field(name="1. 🎡 عجلة الحظ", value="اكتب: `عجلة`", inline=True)
@@ -338,7 +380,7 @@ async def send_games_menu(channel):
     embed.add_field(name="13. 🏎️ سباق السيارات", value="اكتب: `سباق`", inline=True)
     embed.add_field(name="14. ⛏️ التنقيب", value="اكتب: `تعدين`", inline=True)
     embed.add_field(name="15. 🗡️ المبارزة", value="اكتب: `مبارزة`", inline=True)
-    embed.set_footer(text="استمتع باللعب واجمع أكبر عدد من النقاط! (ملاحظة: يوجد وقت انتظار دقيقتين بين كل لعبة وأخرى)")
+    embed.set_footer(text="استمتع باللعب واجمع أكبر عدد من النقاط!")
     await channel.send(embed=embed)
 
 # 4. الأوامر التفاعلية (بدون رموز)
@@ -453,24 +495,7 @@ async def on_message(message):
         points = stats.get(guild_id, {}).get(user_id, {}).get("points", 0)
         await message.channel.send(f"💰 رصيدك الحالي يا {message.author.mention}: **{points}** نقطة.")
 
-    # هـ. أمر الوقت (لمعرفة الوقت المتبقي للعب مرة أخرى)
-    elif text_lower == "وقت":
-        config = load_data(CONFIG_FILE)
-        games_channel_id = config.get(guild_id, {}).get("games_channel")
-        if games_channel_id and message.channel.id != games_channel_id:
-            await message.delete()
-            warn = await message.channel.send(f"❌ عذراً {message.author.mention}, هذا الأمر مخصص فقط في قناة الألعاب!")
-            await asyncio.sleep(4)
-            await warn.delete()
-            return
-
-        can_play, rem_time = check_cooldown(guild_id, user_id, "all_games")
-        if can_play:
-            await message.channel.send(f"✨ يا {message.author.mention}، ليس لديك أي وقت انتظار! يمكنك اللعب الآن 🚀")
-        else:
-            await message.channel.send(f"⏳ يا {message.author.mention}، باقي لك **{rem_time}** وتستطيع اللعب مرة أخرى.")
-
-    # و. ألعاب السيرفر الـ 15 (بدون رموز)
+    # هـ. ألعاب السيرفر الـ 15 (بدون رموز)
     else:
         game_keywords = ["عجلة", "نرد", "زهر", "صناديق", "كنز", "مقص", "تخمين", "حظك", "الالعاب", "تحدي", "حساب", "بلنتي", "سلة", "صيد", "سباق", "تعدين", "مبارزة"]
         matched = False
@@ -494,46 +519,49 @@ async def on_message(message):
                 await send_games_menu(message.channel)
                 return
 
-            # فحص وقت الانتظار العام لكل الألعاب
-            can_play, rem_time = check_cooldown(guild_id, user_id, "all_games")
-            if not can_play:
-                await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب أي لعبة مرة أخرى! (اكتب `وقت` لمعرفة الوقت المتبقي)")
-                return
-
-            set_cooldown(guild_id, user_id, "all_games")
-
+            # 1. لعبة العجلة التفاعلية
             if text_lower == "عجلة":
+                can_play, rem_time = check_cooldown(guild_id, user_id, "wheel")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب لعبة العجلة مرة أخرى!")
+                    return
                 embed = discord.Embed(title="🎡 | عجلة الحظ الكبرى", description=f"يا هلا يا {message.author.mention}, اضغط على الزر بالأسفل لتدوير العجلة وبدء التشويق!", color=discord.Color.gold())
                 view = WheelView(guild_id, user_id)
                 await message.channel.send(embed=embed, view=view)
 
+            # 2. لعبة النرد التفاعلي بأزرار
             elif text_lower in ["نرد", "زهر"]:
-                user_roll = random.randint(1, 6)
-                bot_roll = random.randint(1, 6)
-                embed = discord.Embed(title="🎲 | تحدي النرد", color=discord.Color.blue())
-                embed.add_field(name="رقمك:", value=f"**{user_roll}**", inline=True)
-                embed.add_field(name="رقم البوت:", value=f"**{bot_roll}**", inline=True)
-                if user_roll > bot_roll:
-                    total = add_points(guild_id, user_id, 40)
-                    embed.description = f"🏆 مبروك فزت على البوت وربحت **40 نقطة**! (الرصيد: {total})"
-                elif user_roll < bot_roll:
-                    embed.description = "❌ فاز البوت عليك! حظاً أوفر."
-                else:
-                    total = add_points(guild_id, user_id, 10)
-                    embed.description = f"🤝 تعادلتم! تم منحك **10 نقاط** كمكافأة."
-                await message.channel.send(embed=embed)
+                can_play, rem_time = check_cooldown(guild_id, user_id, "dice")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب لعبة النرد مرة أخرى!")
+                    return
+                embed = discord.Embed(title="🎲 | تحدي النرد", description=f"يا {message.author.mention}, اضغط على الزر بالأسفل لرمي النرد ومنافسة البوت!", color=discord.Color.blue())
+                view = DiceView(guild_id, user_id)
+                await message.channel.send(embed=embed, view=view)
 
             elif text_lower == "صناديق":
+                can_play, rem_time = check_cooldown(guild_id, user_id, "boxes")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تفتح الصناديق مرة أخرى!")
+                    return
                 embed = discord.Embed(title="📦 | فتح الصناديق السرية", description=f"يا {message.author.mention}, اختر أحد الصناديق الثلاثة بحذر واكتشف ما بداخله!", color=discord.Color.purple())
                 view = BoxView(guild_id, user_id)
                 await message.channel.send(embed=embed, view=view)
 
             elif text_lower == "مقص":
+                can_play, rem_time = check_cooldown(guild_id, user_id, "rps")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب حجر ورقة مقص مرة أخرى!")
+                    return
                 embed = discord.Embed(title="✂️ | حجر، ورقة، مقص", description=f"يا {message.author.mention}, اختر حركتك من الأزرار بالأسفل لتتحدى البوت:", color=discord.Color.orange())
                 view = RPSView(guild_id, user_id)
                 await message.channel.send(embed=embed, view=view)
 
             elif text_lower.startswith("تخمين"):
+                can_play, rem_time = check_cooldown(guild_id, user_id, "guess")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب التخمين مرة أخرى!")
+                    return
                 parts = text.split()
                 if len(parts) < 2 or not parts[1].isdigit():
                     await message.channel.send("⚠️ الاستخدام الصحيح:\n`تخمين 7` (اختر رقماً من 1 إلى 10)")
@@ -542,6 +570,7 @@ async def on_message(message):
                 if not (1 <= number <= 10):
                     await message.channel.send("⚠️ أرجو اختيار رقم بين 1 و 10 فقط!")
                     return
+                set_cooldown(guild_id, user_id, "guess")
                 secret = random.randint(1, 10)
                 if number == secret:
                     total = add_points(guild_id, user_id, 100)
@@ -550,6 +579,11 @@ async def on_message(message):
                     await message.channel.send(f"❌ للأسف تخمينك خطأ. الرقم الصحيح كان **{secret}**، حظاً أوفر!")
 
             elif text_lower in ["حظك", "حظك_اليوم"]:
+                can_play, rem_time = check_cooldown(guild_id, user_id, "fortune")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تستخرج حظك مرة أخرى!")
+                    return
+                set_cooldown(guild_id, user_id, "fortune")
                 fortunes = [
                     ("حظك ممتاز اليوم! ربحت 60 نقطة.", 60),
                     ("يومك سعيد، استمتع بـ 30 نقطة.", 30),
@@ -563,6 +597,11 @@ async def on_message(message):
                 await message.channel.send(embed=embed)
 
             elif text_lower == "تحدي":
+                can_play, rem_time = check_cooldown(guild_id, user_id, "speed")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تدخل تحدي السرعة مرة أخرى!")
+                    return
+                set_cooldown(guild_id, user_id, "speed")
                 words = ["ديسكورد", "برمجة", "بايثون", "سيرفر", "تحدي", "سرعة"]
                 target_word = random.choice(words)
                 await message.channel.send(f"🎮 **لعبة السرعة!** أسرع شخص يكتب الكلمة التالية يربح 50 نقطة:\n`{target_word}`")
@@ -577,6 +616,11 @@ async def on_message(message):
                     await message.channel.send(f"🏆 مبروك يا {msg.author.mention}! ربحت **50 نقطة**! (الرصيد: {total})")
 
             elif text_lower == "حساب":
+                can_play, rem_time = check_cooldown(guild_id, user_id, "math")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب لعبة الحساب مرة أخرى!")
+                    return
+                set_cooldown(guild_id, user_id, "math")
                 num1 = random.randint(1, 10)
                 num2 = random.randint(1, 10)
                 answer = num1 + num2
@@ -592,6 +636,11 @@ async def on_message(message):
                     await message.channel.send(f"🏆 بطل الرياضيات يا {msg.author.mention}! ربحت **30 نقطة**! (الرصيد: {total})")
 
             elif text_lower == "كنز":
+                can_play, rem_time = check_cooldown(guild_id, user_id, "treasure")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تدخل مغامرة الكنز مرة أخرى!")
+                    return
+                set_cooldown(guild_id, user_id, "treasure")
                 won = random.choice([0, 70, 120, -30])
                 total = add_points(guild_id, user_id, won)
                 embed = discord.Embed(title="🏴‍☠️ | مغامرة الكنز الملعون", color=discord.Color.dark_gold())
@@ -604,6 +653,11 @@ async def on_message(message):
                 await message.channel.send(embed=embed)
 
             elif text_lower == "بلنتي":
+                can_play, rem_time = check_cooldown(guild_id, user_id, "penalty")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تشاوت ضربة جزاء مرة أخرى!")
+                    return
+                set_cooldown(guild_id, user_id, "penalty")
                 results = ["goal", "saved", "out"]
                 res = random.choice(results)
                 embed = discord.Embed(title="⚽ | ركلة جزاء حاسمة", color=discord.Color.green())
@@ -617,6 +671,11 @@ async def on_message(message):
                 await message.channel.send(embed=embed)
 
             elif text_lower == "سلة":
+                can_play, rem_time = check_cooldown(guild_id, user_id, "basket")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر ترمي السلة مرة أخرى!")
+                    return
+                set_cooldown(guild_id, user_id, "basket")
                 scored = random.choice([True, False])
                 embed = discord.Embed(title="🏀 | رمية ثلاثية", color=discord.Color.orange())
                 if scored:
@@ -627,6 +686,11 @@ async def on_message(message):
                 await message.channel.send(embed=embed)
 
             elif text_lower == "صيد":
+                can_play, rem_time = check_cooldown(guild_id, user_id, "fishing")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تصيد سمك مرة أخرى!")
+                    return
+                set_cooldown(guild_id, user_id, "fishing")
                 catch = random.choice(["سمكة ذهبية", "سمكة عادية", "حذاء قديم", "صندوق زجاجي"])
                 p_map = {"سمكة ذهبية": 60, "سمكة عادية": 25, "حذاء قديم": 0, "صندوق زجاجي": 90}
                 won = p_map[catch]
@@ -634,20 +698,35 @@ async def on_message(message):
                 await message.channel.send(f"🎣 سحبت سنارتك من الماء وطلع معك: **{catch}**! ربحت **{won} نقطة** (الرصيد: {total})")
 
             elif text_lower == "سباق":
+                can_play, rem_time = check_cooldown(guild_id, user_id, "race")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تدخل سباق السيارات مرة أخرى!")
+                    return
+                set_cooldown(guild_id, user_id, "race")
                 cars = ["🏎️ فيراري", "🚗 بورش", "🚙 لبرجيني"]
                 winner = random.choice(cars)
                 total = add_points(guild_id, user_id, 50)
                 await message.channel.send(f"🏁 انتهى السباق بفوز السيارة: **{winner}**! تم منحك **50 نقطة** مشاركة (الرصيد: {total})")
 
             elif text_lower == "تعدين":
-                 minerals = ["💎 الماس", "🪙 ذهب", "🪨 حجر عادي"]
-                 m_pts = {"💎 الماس": 100, "🪙 ذهب": 50, "🪨 حجر عادي": 5}
-                 found = random.choice(minerals)
-                 won = m_pts[found]
-                 total = add_points(guild_id, user_id, won)
-                 await message.channel.send(f"⛏️ نقبت في الصخور واستخرجت: **{found}**! ربحت **{won} نقطة** (الرصيد: {total})")
+                can_play, rem_time = check_cooldown(guild_id, user_id, "mining")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تنقب مرة أخرى!")
+                    return
+                set_cooldown(guild_id, user_id, "mining")
+                minerals = ["💎 الماس", "🪙 ذهب", "🪨 حجر عادي"]
+                m_pts = {"💎 الماس": 100, "🪙 ذهب": 50, "🪨 حجر عادي": 5}
+                found = random.choice(minerals)
+                won = m_pts[found]
+                total = add_points(guild_id, user_id, won)
+                await message.channel.send(f"⛏️ نقبت في الصخور واستخرجت: **{found}**! ربحت **{won} نقطة** (الرصيد: {total})")
 
             elif text_lower == "مبارزة":
+                can_play, rem_time = check_cooldown(guild_id, user_id, "duel")
+                if not can_play:
+                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تدخل مبارزة مرة أخرى!")
+                    return
+                set_cooldown(guild_id, user_id, "duel")
                 won = random.choice([True, False])
                 embed = discord.Embed(title="🗡️ | مبارزة الفرسان", color=discord.Color.dark_red())
                 if won:
