@@ -559,7 +559,7 @@ class BasketballView(discord.ui.View):
         self.guild_id = guild_id
         self.user_id = user_id
 
-    @discord.ui.button(label="🏀 رامية ثلاثية", style=discord.ButtonStyle.orange)
+    @discord.ui.button(label="🏀 رامية ثلاثية", style=discord.ButtonStyle.green)
     async def shoot(self, interaction: discord.Interaction, button: discord.ui.Button):
         if str(interaction.user.id) != self.user_id:
             await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
@@ -571,7 +571,7 @@ class BasketballView(discord.ui.View):
         set_cooldown(self.guild_id, self.user_id, "basketball")
         
         success = random.choice([True, False, True])
-        embed = discord.Embed(title="🏀 كرة السلة", color=discord.Color.orange())
+        embed = discord.Embed(title="🏀 كرة السلة", color=discord.Color.green())
         if success:
             tot = add_points(self.guild_id, self.user_id, 35)
             embed.description = f"🎯 سلة تاريخية! ثلاث نقاط ذهبية وربحت **35** نقطة! (الرصيد: {tot})"
