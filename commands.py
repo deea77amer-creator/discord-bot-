@@ -23,18 +23,7 @@ class TopCommand(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # 1. أمر تحديد قناة التوب (مشابه لباقي أوامر التحديد عندك)
-    @commands.command(name="تحديد_التوب")
-    @commands.has_permissions(administrator=True)
-    async def set_top(self, ctx):
-        config = load_data(CONFIG_FILE)
-        guild_id = str(ctx.guild.id)
-        if guild_id not in config: config[guild_id] = {}
-        config[guild_id]["top_channel"] = ctx.channel.id
-        save_data(config, CONFIG_FILE)
-        await ctx.send("✅ تم تعيين هذه القناة **للوحة الترتيب (التوب)** بنجاح!")
-
-    # 2. الاستماع لكلمة "توب" ورصد مكان القناة
+    # الاستماع لكلمة "توب" ورصد مكان القناة
     @commands.Cog.listener()
     async def on_message(self, message):
         if message.author.bot:
