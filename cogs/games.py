@@ -34,6 +34,25 @@ def init_db():
             PRIMARY KEY (guild_id, user_id, game_name)
         )
     """)
+    # جدول أسعار المزاد الحالية لكل سيرفر
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS market_prices (
+            guild_id TEXT,
+            item_name TEXT,
+            price INTEGER,
+            PRIMARY KEY (guild_id, item_name)
+        )
+    """)
+    # جدول ممتلكات المستخدمين من المزاد
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_inventory (
+            guild_id TEXT,
+            user_id TEXT,
+            item_name TEXT,
+            quantity INTEGER,
+            PRIMARY KEY (guild_id, user_id, item_name)
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -46,7 +65,7 @@ def get_config(guild_id):
     cursor.execute("SELECT games_channel FROM config WHERE guild_id = ?", (str(guild_id),))
     row = cursor.fetchone()
     conn.close()
-    return row[0] if row else None
+    return int(row[0]) if (row and row[0]) else None
 
 def get_user_data(guild_id, user_id):
     conn = sqlite3.connect(DB_FILE)
@@ -97,6 +116,75 @@ def set_cooldown(guild_id, user_id, game_name):
     conn.commit()
     conn.close()
 
+# --- إدارة أسعار وممتلكات المزاد ---
+BASE_MARKET_ITEMS = {
+    "سيف أسطوري": 300,
+    "درع الماس": 250,
+    "صندوق سري نادر": 150,
+    "مفتاح ذهبي": 100,
+    "جرعة حظ": 75,
+    "سيارة سباق فارهة": 600
+}
+
+def update_and_get_market_prices(guild_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT item_name, price FROM market_prices WHERE guild_id = ?", (str(guild_id),))
+    rows = cursor.fetchall()
+    
+    current_prices = {row[0]: row[1] for row in rows}
+    
+    # تحديث أو إنشاء الأسعار عشوائياً (ترتفع أو ترخص)
+    for item, base_price in BASE_MARKET_ITEMS.items():
+        if item not in current_prices:
+            current_prices[item] = base_price
+        else:
+            # تغيّر بنسبة تتراوح بين -20% إلى +25%
+            change_percent = random.uniform(-0.20, 0.25)
+            new_price = int(current_prices[item] * (1 + change_percent))
+            if new_price < 20: 
+                new_price = 20
+            current_prices[item] = new_price
+            
+        cursor.execute("INSERT OR REPLACE INTO market_prices (guild_id, item_name, price) VALUES (?, ?, ?)", (str(guild_id), item, current_prices[item]))
+    
+    conn.commit()
+    conn.close()
+    return current_prices
+
+def get_user_inventory(guild_id, user_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT item_name, quantity FROM user_inventory WHERE guild_id = ? AND user_id = ? AND quantity > 0", (str(guild_id), str(user_id)))
+    rows = cursor.fetchall()
+    conn.close()
+    return {row[0]: row[1] for row in rows}
+
+def add_to_inventory(guild_id, user_id, item_name, qty):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT quantity FROM user_inventory WHERE guild_id = ? AND user_id = ? AND item_name = ?", (str(guild_id), str(user_id), item_name))
+    row = cursor.fetchone()
+    current_qty = row[0] if row else 0
+    new_qty = current_qty + qty
+    cursor.execute("INSERT OR REPLACE INTO user_inventory (guild_id, user_id, item_name, quantity) VALUES (?, ?, ?, ?)", (str(guild_id), str(user_id), item_name, new_qty))
+    conn.commit()
+    conn.close()
+
+def remove_from_inventory(guild_id, user_id, item_name, qty):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT quantity FROM user_inventory WHERE guild_id = ? AND user_id = ? AND item_name = ?", (str(guild_id), str(user_id), item_name))
+    row = cursor.fetchone()
+    if not row or row[0] < qty:
+        conn.close()
+        return False
+    new_qty = row[0] - qty
+    cursor.execute("UPDATE user_inventory SET quantity = ? WHERE guild_id = ? AND user_id = ? AND item_name = ?", (new_qty, str(guild_id), str(user_id), item_name))
+    conn.commit()
+    conn.close()
+    return True
+
 # --- تعريف الـ 26 لعبة تفاعلية ---
 
 class GamesCog(commands.Cog):
@@ -106,7 +194,10 @@ class GamesCog(commands.Cog):
     async def cog_check(self, ctx):
         games_channel_id = get_config(ctx.guild.id)
         if games_channel_id and ctx.channel.id != games_channel_id:
-            await ctx.message.delete()
+            try:
+                await ctx.message.delete()
+            except:
+                pass
             return False
         return True
 
@@ -122,6 +213,22 @@ class GamesCog(commands.Cog):
         text = message.content.strip().lower()
         guild_id = message.guild.id
         user_id = message.author.id
+
+        # أمر تعيين قناة الألعاب لصاحب السيرفر: تعيين_قناة_الالعاب #القناة
+        if text.startswith("تعيين_قناة_الالعاب") or text.startswith("/تعيين_قناة_الالعاب"):
+            if message.author.id != message.guild.owner_id:
+                return await message.channel.send(f"❌ يا {message.author.mention}, هذا الأمر لمالك السيرفر فقط!", delete_after=5)
+            if message.channel_mentions:
+                ch = message.channel_mentions[0]
+                conn = sqlite3.connect(DB_FILE)
+                cursor = conn.cursor()
+                cursor.execute("INSERT OR REPLACE INTO config (guild_id, games_channel) VALUES (?, ?)", (str(guild_id), str(ch.id)))
+                conn.commit()
+                conn.close()
+                await message.channel.send(f"✅ تم تعيين {ch.mention} كقناة رسمية للألعاب بنجاح!")
+            else:
+                await message.channel.send("❌ يرجى منشنة القناة المطلوبة. مثال: `تعيين_قناة_الالعاب #العاب`", delete_after=5)
+            return
 
         # أمر تحكم صاحب السيرفر لإعطاء/خصم النقاط: نقاط @المستخدم العدد
         if text.startswith("نقاط ") or text.startswith("/نقاط "):
@@ -139,6 +246,129 @@ class GamesCog(commands.Cog):
                     await message.channel.send("❌ يرجى كتابة رقم صحيح للنقاط. مثال: `نقاط @user 100`", delete_after=5)
             else:
                 await message.channel.send("❌ الاستخدام الصحيح: `نقاط @المستخدم العدد`", delete_after=5)
+            return
+
+        # أمر أسعار المزاد (لمعرفة أسعار الأشياء وكيف ترتفع وترخص)
+        if text in ["اسعار", "الأسعار", "/اسعار", "أسعار"]:
+            prices = update_and_get_market_prices(guild_id)
+            embed = discord.Embed(
+                title="📈 سُوق المِزَاد العَالَمِي (تتغير الأسعار باستمرار) 📉",
+                description="إليك أسعار الأغراض الحالية في المزاد:\n",
+                color=discord.Color.gold()
+            )
+            for item, price in prices.items():
+                embed.add_field(name=item, value=f"💰 **{price}** نقطة", inline=True)
+            embed.set_footer(text="💡 استخدم أمر: شراء <اسم الغرض> لشرائه.")
+            await message.channel.send(embed=embed)
+            return
+
+        # أمر شراء من المزاد: شراء <اسم الغرض>
+        if text.startswith("شراء ") or text.startswith("/شراء "):
+            parts = message.content.strip().split(maxsplit=1)
+            if len(parts) < 2:
+                return await message.channel.send("❌ الاستخدام: `شراء <اسم الغرض>`", delete_after=5)
+            item_query = parts[1].strip()
+            prices = update_and_get_market_prices(guild_id)
+            
+            matched_item = None
+            for itm in prices.keys():
+                if item_query in itm.lower():
+                    matched_item = itm
+                    break
+            
+            if not matched_item:
+                return await message.channel.send("❌ هذا الغرض غير موجود في المزاد! اكتب `أسعار` لرؤية القائمة.", delete_after=5)
+            
+            cost = prices[matched_item]
+            user_pts = get_user_data(guild_id, user_id)
+            if user_pts < cost:
+                return await message.channel.send(f"❌ رصيدك ({user_pts} نقطة) لا يكفي لشراء **{matched_item}** بسعر `{cost}` نقطة!", delete_after=5)
+            
+            add_points(guild_id, user_id, -cost)
+            add_to_inventory(guild_id, user_id, matched_item, 1)
+            await message.channel.send(f"🎉 مبروك! اشتريت **{matched_item}** بقيمة `{cost}` نقطة بنجاح.")
+            return
+
+        # أمر ممتلكات (لعرض كم شيء شريته من المزاد)
+        if text in ["ممتلكات", "/ممتلكات", "حقيبتي", "أغراضي"]:
+            inv = get_user_inventory(guild_id, user_id)
+            embed = discord.Embed(
+                title=f"🎒 مُمْتَلَكَات وحَقِيبَة {message.author.display_name}",
+                color=discord.Color.purple()
+            )
+            if not inv:
+                embed.description = "❌ حقيبتك فارغة تماماً! لم تقم بشراء أي شيء من المزاد بعد."
+            else:
+                desc = ""
+                for itm, qty in inv.items():
+                    desc += f"• **{itm}** ⟵ الكمية: `{qty}`\n"
+                embed.description = desc
+            embed.set_footer(text="💡 استخدم أمر: بيع <اسم الغرض> (أو بيع الكل / بيع نص) لبيع ممتلكاتك.")
+            await message.channel.send(embed=embed)
+            return
+
+        # أمر بيع (بيع كامل، بيع نص، أو حسب العدد)
+        # الصيغ المتوقعة: بيع <الغرض> كامل | بيع <الغرض> نص | بيع <الغرض> <العدد> | بيع كل شيء
+        if text.startswith("بيع ") or text.startswith("/بيع "):
+            parts = message.content.strip().split()
+            if len(parts) < 2:
+                return await message.channel.send("❌ الاستخدام الصحيح:\n• `بيع <الغرض> كامل`\n• `بيع <الغرض> نص`\n• `بيع <الغرض> <العدد>`", delete_after=5)
+            
+            inv = get_user_inventory(guild_id, user_id)
+            if not inv:
+                return await message.channel.send("❌ ليس لديك أي ممتلكات لتبيعها!", delete_after=5)
+            
+            # محاولة مطابقة اسم الغرض من الحقيبة
+            matched_item = None
+            query_str = " ".join(parts[1:-1]).lower()
+            last_arg = parts[-1].lower()
+            
+            # فحص إذا كان الغرض يتكون من كلمة واحدة أو أكثر
+            for itm in inv.keys():
+                if message.content.strip().lower().contains(itm.lower()) or query_str in itm.lower():
+                    matched_item = itm
+                    break
+            
+            # تبسيط عملية البحث إذا فشلت المطابقة الجزئية
+            if not matched_item:
+                for itm in inv.keys():
+                    if parts[1].lower() in itm.lower():
+                        matched_item = itm
+                        break
+            
+            if not matched_item:
+                return await message.channel.send("❌ الغرض المطلوب غير موجود في ممتلكاتك!", delete_after=5)
+            
+            owned_qty = inv[matched_item]
+            prices = update_and_get_market_prices(guild_id)
+            unit_price = prices.get(matched_item, 50)
+            
+            sell_qty = 1
+            if last_arg in ["كامل", "الكل", "كل"]:
+                sell_qty = owned_qty
+            elif last_arg in ["نص", "نصف"]:
+                sell_qty = max(1, owned_qty // 2)
+            else:
+                try:
+                    sell_qty = int(last_arg)
+                except ValueError:
+                    # لو كتب أمر بيع الغرض مباشرة بدون تحديد كمية (يفترض 1)
+                    sell_qty = 1
+            
+            if sell_qty > owned_qty or sell_qty <= 0:
+                return await message.channel.send(f"❌ الكمية غير صحيحة. لديك في الممتلكات: `{owned_qty}` فقط.", delete_after=5)
+            
+            success = remove_from_inventory(guild_id, user_id, matched_item, sell_qty)
+            if not success:
+                return await message.channel.send("❌ حدث خطأ أثناء إتمام عملية البيع.", delete_after=5)
+            
+            # سعر البيع يعتمد على سعر السوق الحالي (مثلاً 80% من قيمة الشراء الحالية)
+            total_earned = int(unit_price * 0.8 * sell_qty)
+            if total_earned < 1: 
+                total_earned = sell_qty * 10
+                
+            new_tot = add_points(guild_id, user_id, total_earned)
+            await message.channel.send(f"💸 تم بيع `{sell_qty}` من **{matched_item}** بنجاح واسترداد **{total_earned}** نقطة! الرصيد الحالي: **{new_tot}** نقطة.")
             return
 
         # أمر عرض قائمة الألعاب الفخمة
