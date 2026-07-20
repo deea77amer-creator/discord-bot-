@@ -5,11 +5,8 @@ import json
 class AllChannelsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # آيدي القناة المخصصة للحفظ التلقائي
         self.storage_channel_id = 1528829118681059498
         self.config_data = {}
-        
-        # قراءة البيانات أول ما يبدأ الكوج
         self.bot.loop.create_task(self.async_load_data())
 
     async def async_load_data(self):
@@ -19,7 +16,6 @@ class AllChannelsCog(commands.Cog):
             return
 
         try:
-            # نبحث في آخر رسائل القناة عن الرسالة اللي فيها الإعدادات
             async for message in channel.history(limit=10):
                 if message.author == self.bot.user and message.content.startswith("{"):
                     self.config_data = json.loads(message.content)
@@ -35,13 +31,11 @@ class AllChannelsCog(commands.Cog):
         content = json.dumps(self.config_data, ensure_ascii=False)
 
         try:
-            # نبحث إذا فيه رسالة سابقة للبوت عشان نحدثها وما نكثر رسائل عشوائية
             async for message in channel.history(limit=10):
                 if message.author == self.bot.user and message.content.startswith("{"):
                     await message.edit(content=content)
                     return
             
-            # إذا ما فيه رسالة سابقة، يرسل رسالة جديدة
             await channel.send(content)
         except Exception as e:
             print(f"خطأ أثناء حفظ البيانات في القناة: {e}")
@@ -49,21 +43,14 @@ class AllChannelsCog(commands.Cog):
     @commands.command(name="تحديد")
     @commands.has_permissions(administrator=True)
     async def set_channel(self, ctx, channel_type: str, channel: discord.TextChannel = None):
-        """
-        طريقة الاستخدام:
-        !تحديد السجلات #قناة
-        !تحديد الالعاب #قناة
-        """
         if channel is None:
             channel = ctx.channel
 
         key = channel_type.lower()
-        
-        # حفظ البيانات محلياً وفي قناة الديسكورد فوراً
         self.config_data[key] = channel.id
         await self.save_data_to_discord()
 
-        await ctx.send(f"✅ تم حفظ وتحديد قناة **({channel_type})** بنجاح وحفظها تلقائياً في قناة الديسكورد: {channel.mention}")
+        await ctx.send(f"✅ تم حفظ وتحديد قناة ({channel_type}) بنجاح وحفظها تلقائياً في قناة الديسكورد: {channel.mention}")
 
     @commands.command(name="قنواتي")
     @commands.has_permissions(administrator=True)
