@@ -1,5 +1,5 @@
 import os
-import json
+import sqlite3
 import asyncio
 import discord
 from discord.ext import commands
@@ -8,7 +8,7 @@ from flask import Flask
 from threading import Thread
 import random
 
-# --- إعداد سيرفر الـ Flask الوهمي لمنع مشكلة Port Timeout على Render ---
+# --- إعداد سيرفر الـ Flask الوهمي لمنع Port Timeout ---
 app = Flask('')
 
 @app.route('/')
@@ -22,7 +22,6 @@ def run():
 def keep_alive():
     t = Thread(target=run)
     t.start()
-# -----------------------------------------------------------------
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -30,360 +29,644 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-DATA_FILE = "stats.json"
-CONFIG_FILE = "config.json"
+# --- نظام قاعدة البيانات المحلية SQLite (حفظ دائم) ---
+DB_FILE = "database.db"
 
-def load_data(file_path):
-    if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except json.JSONDecodeError:
-                return {}
-    return {}
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            guild_id TEXT,
+            user_id TEXT,
+            joins INTEGER DEFAULT 0,
+            leaves INTEGER DEFAULT 0,
+            points INTEGER DEFAULT 0,
+            checkins_count INTEGER DEFAULT 0,
+            manual_leaves_count INTEGER DEFAULT 0,
+            last_checkin TEXT DEFAULT "",
+            last_leave TEXT DEFAULT "",
+            PRIMARY KEY (guild_id, user_id)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cooldowns (
+            guild_id TEXT,
+            user_id TEXT,
+            game_name TEXT,
+            last_time TEXT,
+            PRIMARY KEY (guild_id, user_id, game_name)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS config (
+            guild_id TEXT PRIMARY KEY,
+            welcome_channel INTEGER,
+            leave_channel INTEGER,
+            games_channel INTEGER,
+            records_channel INTEGER
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-def save_data(data, file_path):
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+init_db()
+
+def get_user_data(guild_id, user_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT joins, leaves, points, checkins_count, manual_leaves_count, last_checkin, last_leave FROM users WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
+    row = cursor.fetchone()
+    if not row:
+        cursor.execute("INSERT OR IGNORE INTO users (guild_id, user_id) VALUES (?, ?)", (str(guild_id), str(user_id)))
+        conn.commit()
+        data = {"joins": 0, "leaves": 0, "points": 0, "checkins_count": 0, "manual_leaves_count": 0, "last_checkin": "", "last_leave": ""}
+    else:
+        data = {
+            "joins": row[0], "leaves": row[1], "points": row[2],
+            "checkins_count": row[3], "manual_leaves_count": row[4],
+            "last_checkin": row[5], "last_leave": row[6]
+        }
+    conn.close()
+    return data
+
+def update_user_data(guild_id, user_id, **kwargs):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    get_user_data(guild_id, user_id)
+    for key, val in kwargs.items():
+        cursor.execute(f"UPDATE users SET {key} = ? WHERE guild_id = ? AND user_id = ?", (val, str(guild_id), str(user_id)))
+    conn.commit()
+    conn.close()
 
 def add_points(guild_id, user_id, amount):
-    stats = load_data(DATA_FILE)
-    g_id = str(guild_id)
-    u_id = str(user_id)
-    if g_id not in stats: stats[g_id] = {}
-    if u_id not in stats[g_id]: 
-        stats[g_id][u_id] = {"joins": 0, "leaves": 0, "points": 0}
-    if "points" not in stats[g_id][u_id]: 
-        stats[g_id][u_id]["points"] = 0
-    
-    stats[g_id][u_id]["points"] += amount
-    save_data(stats, DATA_FILE)
-    return stats[g_id][u_id]["points"]
+    data = get_user_data(guild_id, user_id)
+    new_points = data["points"] + amount
+    update_user_data(guild_id, user_id, points=new_points)
+    return new_points
+
+def get_config(guild_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT welcome_channel, leave_channel, games_channel, records_channel FROM config WHERE guild_id = ?", (str(guild_id),))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {
+            "welcome_channel": row[0],
+            "leave_channel": row[1],
+            "games_channel": row[2],
+            "records_channel": row[3]
+        }
+    return {}
+
+def save_config_key(guild_id, key, value):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(f"INSERT INTO config (guild_id, {key}) VALUES (?, ?) ON CONFLICT(guild_id) DO UPDATE SET {key} = ?", (str(guild_id), value, value))
+    conn.commit()
+    conn.close()
 
 @bot.event
 async def on_ready():
-    print(f"البوت جاهز وشغال باسم: {bot.user}")
+    print(f"البوت جاهز ومتصل بقاعدة البيانات المحلية باسم: {bot.user}")
 
-# 1. نظام الترحيب عند دخول السيرفر
+# --- نظام الترحيب والمغادرة ---
 @bot.event
 async def on_member_join(member):
     guild_id = str(member.guild.id)
     user_id = str(member.id)
-    
-    stats = load_data(DATA_FILE)
-    if guild_id not in stats: stats[guild_id] = {}
-    if user_id not in stats[guild_id]: 
-        stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0, "last_checkin": "", "checkins_count": 0, "last_leave": "", "manual_leaves_count": 0}
-        
-    stats[guild_id][user_id]["joins"] += 1
-    save_data(stats, DATA_FILE)
+    data = get_user_data(guild_id, user_id)
+    new_joins = data["joins"] + 1
+    update_user_data(guild_id, user_id, joins=new_joins)
 
-    config = load_data(CONFIG_FILE)
-    if guild_id in config and "welcome_channel" in config[guild_id]:
-        channel_id = config[guild_id]["welcome_channel"]
-        channel = member.guild.get_channel(channel_id)
+    config = get_config(guild_id)
+    if config.get("welcome_channel"):
+        channel = member.guild.get_channel(config["welcome_channel"])
         if channel:
-            embed = discord.Embed(
-                title="✨ | وعاد النور إلى السيرفر!",
-                description=f"أهلاً ومرحباً بك يا {member.mention} في عائلتنا!\n"
-                            f"• أنت العضو رقم **{member.guild.member_count}**\n"
-                            f"• عدد مرات دخولك للسيرفر: **{stats[guild_id][user_id]['joins']}** مرة",
-                color=discord.Color.gold()
-            )
+            embed = discord.Embed(title="✨ | وعاد النور إلى السيرفر!", description=f"أهلاً ومرحباً بك يا {member.mention}\n• عدد مرات دخولك: **{new_joins}**", color=discord.Color.gold())
             await channel.send(content=f"حياك الله {member.mention} 🚀", embed=embed)
 
-# 2. نظام تسجيل المغادرة التلقائي عند الخروج الفعلي من السيرفر
 @bot.event
 async def on_member_remove(member):
     guild_id = str(member.guild.id)
     user_id = str(member.id)
-    
-    stats = load_data(DATA_FILE)
-    if guild_id not in stats: stats[guild_id] = {}
-    if user_id not in stats[guild_id]: 
-        stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0, "last_checkin": "", "checkins_count": 0, "last_leave": "", "manual_leaves_count": 0}
-        
-    stats[guild_id][user_id]["leaves"] += 1
-    save_data(stats, DATA_FILE)
+    data = get_user_data(guild_id, user_id)
+    new_leaves = data["leaves"] + 1
+    update_user_data(guild_id, user_id, leaves=new_leaves)
 
-    config = load_data(CONFIG_FILE)
-    if guild_id in config and "leave_channel" in config[guild_id]:
-        channel_id = config[guild_id]["leave_channel"]
-        channel = member.guild.get_channel(channel_id)
+    config = get_config(guild_id)
+    if config.get("leave_channel"):
+        channel = member.guild.get_channel(config["leave_channel"])
         if channel:
-            embed = discord.Embed(
-                title="👋 | طير من الطيور غادرنا!",
-                description=f"العضو **{member.name}** طلع من السيرفر.\n"
-                            f"• إجمالي مرات خروجه: **{stats[guild_id][user_id]['leaves']}** مرة",
-                color=discord.Color.red()
-            )
+            embed = discord.Embed(title="👋 | طير غادرنا!", description=f"العضو **{member.name}** طلع.\n• إجمالي مرات خروجه: **{new_leaves}**", color=discord.Color.red())
             await channel.send(embed=embed)
 
-# 3. أوامر الإدارة لتحديد القنوات بدقة
+# --- أوامر تحديد القنوات ---
 @bot.command(name="تحديد_الترحيب")
 @commands.has_permissions(administrator=True)
 async def set_welcome(ctx):
-    config = load_data(CONFIG_FILE)
-    guild_id = str(ctx.guild.id)
-    if guild_id not in config: config[guild_id] = {}
-    config[guild_id]["welcome_channel"] = ctx.channel.id
-    save_data(config, CONFIG_FILE)
-    await ctx.send("✅ تم تعيين هذه القناة **للترحيب** بنجاح!")
+    save_config_key(ctx.guild.id, "welcome_channel", ctx.channel.id)
+    await ctx.send("✅ تم تعيين قناة **الترحيب** بنجاح!")
 
 @bot.command(name="تحديد_الخروج")
 @commands.has_permissions(administrator=True)
 async def set_leave(ctx):
-    config = load_data(CONFIG_FILE)
-    guild_id = str(ctx.guild.id)
-    if guild_id not in config: config[guild_id] = {}
-    config[guild_id]["leave_channel"] = ctx.channel.id
-    save_data(config, CONFIG_FILE)
-    await ctx.send("✅ تم تعيين هذه القناة **للخروج** بنجاح!")
+    save_config_key(ctx.guild.id, "leave_channel", ctx.channel.id)
+    await ctx.send("✅ تم تعيين قناة **الخروج** بنجاح!")
 
 @bot.command(name="تحديد_الألعاب")
 @commands.has_permissions(administrator=True)
 async def set_games(ctx):
-    config = load_data(CONFIG_FILE)
-    guild_id = str(ctx.guild.id)
-    if guild_id not in config: config[guild_id] = {}
-    config[guild_id]["games_channel"] = ctx.channel.id
-    save_data(config, CONFIG_FILE)
-    await ctx.send("✅ تم تعيين هذه القناة **للألعاب** بنجاح!")
+    save_config_key(ctx.guild.id, "games_channel", ctx.channel.id)
+    await ctx.send("✅ تم تعيين قناة **الألعاب** بنجاح!")
 
 @bot.command(name="تحديد_السجلات")
 @commands.has_permissions(administrator=True)
 async def set_records(ctx):
-    config = load_data(CONFIG_FILE)
-    guild_id = str(ctx.guild.id)
-    if guild_id not in config: config[guild_id] = {}
-    config[guild_id]["records_channel"] = ctx.channel.id
-    save_data(config, CONFIG_FILE)
-    await ctx.send("✅ تم تعيين هذه القناة **لسجلات الحضور** بنجاح!")
+    save_config_key(ctx.guild.id, "records_channel", ctx.channel.id)
+    await ctx.send("✅ تم تعيين قناة **السجلات** بنجاح!")
 
-# دالة للتحقق من وقت الانتظار (Cooldown) لكل لعبة على حدة (دقيقتين)
+# --- نظام الكول داون (دقيقتان) ---
 COOLDOWN_TIME = timedelta(minutes=2)
 
 def check_cooldown(guild_id, user_id, game_name):
-    stats = load_data(DATA_FILE)
-    g_id = str(guild_id)
-    u_id = str(user_id)
-    
-    if g_id in stats and u_id in stats[g_id]:
-        cooldowns = stats[g_id][u_id].get("cooldowns", {})
-        if game_name in cooldowns:
-            last_time = datetime.fromisoformat(cooldowns[game_name])
-            now = datetime.now()
-            if now - last_time < COOLDOWN_TIME:
-                remaining = COOLDOWN_TIME - (now - last_time)
-                mins = int(remaining.total_seconds() // 60)
-                secs = int(remaining.total_seconds() % 60)
-                return False, f"{mins} دقيقة و {secs} ثانية"
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT last_time FROM cooldowns WHERE guild_id = ? AND user_id = ? AND game_name = ?", (str(guild_id), str(user_id), game_name))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        last_time = datetime.fromisoformat(row[0])
+        now = datetime.now()
+        if now - last_time < COOLDOWN_TIME:
+            remaining = COOLDOWN_TIME - (now - last_time)
+            mins = int(remaining.total_seconds() // 60)
+            secs = int(remaining.total_seconds() % 60)
+            return False, f"{mins} دقيقة و {secs} ثانية"
     return True, ""
 
 def set_cooldown(guild_id, user_id, game_name):
-    stats = load_data(DATA_FILE)
-    g_id = str(guild_id)
-    u_id = str(user_id)
-    
-    if g_id not in stats: stats[g_id] = {}
-    if u_id not in stats[g_id]: stats[g_id][u_id] = {}
-    if "cooldowns" not in stats[g_id][u_id]: stats[g_id][u_id]["cooldowns"] = {}
-    
-    stats[g_id][u_id]["cooldowns"][game_name] = datetime.now().isoformat()
-    save_data(stats, DATA_FILE)
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    now_str = datetime.now().isoformat()
+    cursor.execute("INSERT INTO cooldowns (guild_id, user_id, game_name, last_time) VALUES (?, ?, ?, ?) ON CONFLICT(guild_id, user_id, game_name) DO UPDATE SET last_time = ?", (str(guild_id), str(user_id), game_name, now_str, now_str))
+    conn.commit()
+    conn.close()
 
-# 1. كلاس أزرار عجلة الحظ التفاعلية
+# --- واجهات الألعاب الـ 15 التفاعلية ---
+
+# 1. عجلة الحظ
 class WheelView(discord.ui.View):
     def __init__(self, guild_id, user_id):
         super().__init__(timeout=60)
         self.guild_id = guild_id
         self.user_id = user_id
 
-    @discord.ui.button(label="🎡 اضغط لتدوير العجلة!", style=discord.ButtonStyle.green)
-    async def spin_wheel(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🎡 تدوير العجلة", style=discord.ButtonStyle.green)
+    async def spin(self, interaction: discord.Interaction, button: discord.ui.Button):
         if str(interaction.user.id) != self.user_id:
-            await interaction.response.send_message("❌ هذه العجلة ليست لك!", ephemeral=True)
+            await interaction.response.send_message("❌ ليست لك!", ephemeral=True)
             return
-
-        can_play, rem_time = check_cooldown(self.guild_id, self.user_id, "wheel")
-        if not can_play:
-            await interaction.response.send_message(f"⏳ يا {interaction.user.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب لعبة العجلة مرة أخرى!", ephemeral=True)
+        can, rem = check_cooldown(self.guild_id, self.user_id, "wheel")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
             return
-
         set_cooldown(self.guild_id, self.user_id, "wheel")
-
-        # أنميشن وهمي لزيادة الحماس
-        await interaction.response.edit_message(embed=discord.Embed(title="🎡 | عجلة الحظ الكبرى", description="🔄 جاري تدوير العجلة... يرجى الانتظار...", color=discord.Color.gold()), view=None)
-        await asyncio.sleep(2.0)
-
-        prizes = [10, 25, 50, 100, 200, 0, 500, 50]
-        weights = [30, 25, 20, 10, 5, 5, 2, 3]
-        won = random.choices(prizes, weights=weights)[0]
-        
-        embed = discord.Embed(title="🎡 | عجلة الحظ الكبرى", description=f"يا هلا يا {interaction.user.mention}, انتهت اللفة!", color=discord.Color.gold())
+        await interaction.response.edit_message(embed=discord.Embed(title="🎡 جاري تدوير العجلة...", color=discord.Color.gold()), view=None)
+        await asyncio.sleep(1.5)
+        won = random.choice([10, 25, 50, 100, 200, 0, 500])
+        embed = discord.Embed(title="🎡 عجلة الحظ", color=discord.Color.gold())
         if won > 0:
-            total = add_points(self.guild_id, self.user_id, won)
-            embed.add_field(name="النتيجة:", value=f"🎉 مبروك! ربحت **{won} نقطة**!\n💰 رصيدك الإجمالي: **{total} نقطة**")
+            tot = add_points(self.guild_id, self.user_id, won)
+            embed.description = f"🎉 مبروك ربحت **{won}** نقطة! الرصيد: **{tot}**"
         else:
-            embed.add_field(name="النتيجة:", value=" خسارة! العجلة وقفت على الصفر، حظاً أوفر!")
-        
-        await interaction.edit_original_response(embed=embed, view=None)
+            embed.description = "❌ خسارة، العجلة وقفت على الصفر."
+        await interaction.edit_original_response(embed=embed)
 
-# 2. كلاس أزرار النرد التفاعلي (بدء رمي النرد)
+# 2. النرد
 class DiceView(discord.ui.View):
     def __init__(self, guild_id, user_id):
         super().__init__(timeout=60)
         self.guild_id = guild_id
         self.user_id = user_id
 
-    @discord.ui.button(label="🎲 ارمِ النرد الآن!", style=discord.ButtonStyle.blurple)
-    async def roll_dice(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🎲 ارمِ النرد", style=discord.ButtonStyle.blurple)
+    async def roll(self, interaction: discord.Interaction, button: discord.ui.Button):
         if str(interaction.user.id) != self.user_id:
-            await interaction.response.send_message("❌ هذا النرد ليس لك!", ephemeral=True)
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
             return
-
-        can_play, rem_time = check_cooldown(self.guild_id, self.user_id, "dice")
-        if not can_play:
-            await interaction.response.send_message(f"⏳ يا {interaction.user.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب لعبة النرد مرة أخرى!", ephemeral=True)
+        can, rem = check_cooldown(self.guild_id, self.user_id, "dice")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
             return
-
         set_cooldown(self.guild_id, self.user_id, "dice")
-
-        # أنميشن هزة النرد
-        await interaction.response.edit_message(embed=discord.Embed(title="🎲 | تحدي النرد", description="🎲 جاري رج الأكواب ورمي النرد...", color=discord.Color.blue()), view=None)
-        await asyncio.sleep(1.8)
-
-        user_roll = random.randint(1, 6)
-        bot_roll = random.randint(1, 6)
-        
-        embed = discord.Embed(title="🎲 | تحدي النرد", color=discord.Color.blue())
-        embed.add_field(name="رقمك:", value=f"**{user_roll}**", inline=True)
-        embed.add_field(name="رقم البوت:", value=f"**{bot_roll}**", inline=True)
-        
-        if user_roll > bot_roll:
-            total = add_points(self.guild_id, self.user_id, 40)
-            embed.description = f"🏆 مبروك فزت على البوت وربحت **40 نقطة**! (الرصيد: {total})"
-        elif user_roll < bot_roll:
-            embed.description = "❌ فاز البوت عليك! حظاً أوفر."
+        await interaction.response.edit_message(embed=discord.Embed(title="🎲 جاري رمي النرد...", color=discord.Color.blue()), view=None)
+        await asyncio.sleep(1.5)
+        u, b = random.randint(1, 6), random.randint(1, 6)
+        embed = discord.Embed(title="🎲 تحدي النرد", description=f"رقمك: {u} | رقم البوت: {b}", color=discord.Color.blue())
+        if u > b:
+            tot = add_points(self.guild_id, self.user_id, 40)
+            embed.description += f"\n🏆 فزت وربحت **40** نقطة! (الرصيد: {tot})"
+        elif u < b:
+            embed.description += "\n❌ خسرت أمام البوت!"
         else:
-            total = add_points(self.guild_id, self.user_id, 10)
-            embed.description = f"🤝 تعادلتم! تم منحك **10 نقاط** كمكافأة."
-            
-        await interaction.edit_original_response(embed=embed, view=None)
+            tot = add_points(self.guild_id, self.user_id, 10)
+            embed.description += f"\n🤝 تعادل! منحت **10** نقاط."
+        await interaction.edit_original_response(embed=embed)
 
-# كلاس أزرار الصناديق التفاعلية
-class BoxView(discord.ui.View):
+# 3. الصناديق
+class BoxesView(discord.ui.View):
     def __init__(self, guild_id, user_id):
         super().__init__(timeout=60)
         self.guild_id = guild_id
         self.user_id = user_id
+        self.winning = random.randint(1, 3)
 
-    async def open_box_action(self, interaction: discord.Interaction, box_name):
+    @discord.ui.button(label="📦 صندوق 1", style=discord.ButtonStyle.secondary)
+    async def b1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process(interaction, 1)
+    @discord.ui.button(label="📦 صندوق 2", style=discord.ButtonStyle.secondary)
+    async def b2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process(interaction, 2)
+    @discord.ui.button(label="📦 صندوق 3", style=discord.ButtonStyle.secondary)
+    async def b3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.process(interaction, 3)
+
+    async def process(self, interaction, choice):
         if str(interaction.user.id) != self.user_id:
-            await interaction.response.send_message("❌ هذا الصندوق ليس لك!", ephemeral=True)
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
             return
-
-        can_play, rem_time = check_cooldown(self.guild_id, self.user_id, "boxes")
-        if not can_play:
-            await interaction.response.send_message(f"⏳ يا {interaction.user.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تفتح الصناديق مرة أخرى!", ephemeral=True)
+        can, rem = check_cooldown(self.guild_id, self.user_id, "boxes")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
             return
-
         set_cooldown(self.guild_id, self.user_id, "boxes")
-
-        boxes = ["💎 كنز ثمين (150 نقطة)", "🪙 قطعة ذهبية (50 نقطة)", "💨 صندوق فارغ", "💣 قنبلة (-20 نقطة)"]
-        weights = [10, 30, 45, 15]
-        result = random.choices(boxes, weights=weights)[0]
-        points_map = {"💎 كنز ثمين (150 نقطة)": 150, "🪙 قطعة ذهبية (50 نقطة)": 50, "💨 صندوق فارغ": 0, "💣 قنبلة (-20 نقطة)": -20}
-        won = points_map[result]
-        total = add_points(self.guild_id, self.user_id, won)
         
-        embed = discord.Embed(title="📦 | فتح الصناديق السرية", description=f"يا {interaction.user.mention}, اخترت `{box_name}` وطلع لك داخله:\n**{result}**\n\n💰 رصيدك الحالي: **{total} نقطة**", color=discord.Color.purple())
+        embed = discord.Embed(title="📦 فتح الصناديق", color=discord.Color.purple())
+        if choice == self.winning:
+            tot = add_points(self.guild_id, self.user_id, 50)
+            embed.description = f"🎉 مبروك! اخترت الصندوق الصحيح وربحت **50** نقطة! (الرصيد: {tot})"
+        else:
+            embed.description = f"❌ حظ أوفر! الصندوق الصحيح كان رقم {self.winning}."
         await interaction.response.edit_message(embed=embed, view=None)
 
-    @discord.ui.button(label="الصندوق الأول 📦", style=discord.ButtonStyle.blurple)
-    async def box_1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.open_box_action(interaction, "الصندوق الأول")
-
-    @discord.ui.button(label="الصندوق الثاني 📦", style=discord.ButtonStyle.blurple)
-    async def box_2(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.open_box_action(interaction, "الصندوق الثاني")
-
-    @discord.ui.button(label="الصندوق الثالث 📦", style=discord.ButtonStyle.blurple)
-    async def box_3(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.open_box_action(interaction, "الصندوق الثالث")
-
-# كلاس أزرار حجر ورقة مقص التفاعلية
-class RPSView(discord.ui.View):
+# 4. حجر ورقة مقص
+class RpsView(discord.ui.View):
     def __init__(self, guild_id, user_id):
         super().__init__(timeout=60)
         self.guild_id = guild_id
         self.user_id = user_id
 
-    async def play_rps(self, interaction: discord.Interaction, choice: str):
+    @discord.ui.button(label="🪨 حجر", style=discord.ButtonStyle.primary)
+    async def rock(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.play(interaction, "حجر")
+    @discord.ui.button(label="📄 ورقة", style=discord.ButtonStyle.primary)
+    async def paper(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.play(interaction, "ورقة")
+    @discord.ui.button(label="✂️ مقص", style=discord.ButtonStyle.primary)
+    async def scissors(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.play(interaction, "مقص")
+
+    async def play(self, interaction, choice):
         if str(interaction.user.id) != self.user_id:
-            await interaction.response.send_message("❌ هذه اللعبة ليست لك!", ephemeral=True)
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
             return
-
-        can_play, rem_time = check_cooldown(self.guild_id, self.user_id, "rps")
-        if not can_play:
-            await interaction.response.send_message(f"⏳ يا {interaction.user.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب حجر ورقة مقص مرة أخرى!", ephemeral=True)
+        can, rem = check_cooldown(self.guild_id, self.user_id, "rps")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
             return
-
         set_cooldown(self.guild_id, self.user_id, "rps")
-
-        bot_choice = random.choice(["حجر", "ورقة", "مقص"])
-        embed = discord.Embed(title="✂️ | حجر، ورقة، مقص", color=discord.Color.orange())
-        embed.add_field(name="اختيارك:", value=choice, inline=True)
-        embed.add_field(name="اختيار البوت:", value=bot_choice, inline=True)
         
+        bot_choice = random.choice(["حجر", "ورقة", "مقص"])
+        embed = discord.Embed(title="✂️ حجر ورقة مقص", color=discord.Color.teal())
+        embed.add_field(name="اختيارك:", value=choice)
+        embed.add_field(name="اختيار البوت:", value=bot_choice)
+
         if choice == bot_choice:
-            embed.description = "🤝 تعادلنا!"
+            embed.description = "🤝 تعادل!"
         elif (choice == "حجر" and bot_choice == "مقص") or (choice == "ورقة" and bot_choice == "حجر") or (choice == "مقص" and bot_choice == "ورقة"):
-            total = add_points(self.guild_id, self.user_id, 35)
-            embed.description = f"🎉 مبروك فزت! ربحت **35 نقطة** (الرصيد: {total})"
+            tot = add_points(self.guild_id, self.user_id, 30)
+            embed.description = f"🏆 فزت وربحت **30** نقطة! (الرصيد: {tot})"
         else:
-            embed.description = "❌ خسرت أمام البوت!"
-            
+            embed.description = "❌ خسرتم أمام البوت!"
         await interaction.response.edit_message(embed=embed, view=None)
 
-    @discord.ui.button(label="🪨 حجر", style=discord.ButtonStyle.secondary)
-    async def rps_rock(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.play_rps(interaction, "حجر")
+# 5. تخمين الرقم
+class GuessView(discord.ui.View):
+    def __init__(self, guild_id, user_id):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+        self.user_id = user_id
+        self.target = random.randint(1, 5)
 
-    @discord.ui.button(label="📄 ورقة", style=discord.ButtonStyle.secondary)
-    async def rps_paper(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.play_rps(interaction, "ورقة")
+    @discord.ui.button(label="1", style=discord.ButtonStyle.blurple)
+    async def n1(self, interaction: discord.Interaction, button: discord.ui.Button): await self.chk(interaction, 1)
+    @discord.ui.button(label="2", style=discord.ButtonStyle.blurple)
+    async def n2(self, interaction: discord.Interaction, button: discord.ui.Button): await self.chk(interaction, 2)
+    @discord.ui.button(label="3", style=discord.ButtonStyle.blurple)
+    async def n3(self, interaction: discord.Interaction, button: discord.ui.Button): await self.chk(interaction, 3)
+    @discord.ui.button(label="4", style=discord.ButtonStyle.blurple)
+    async def n4(self, interaction: discord.Interaction, button: discord.ui.Button): await self.chk(interaction, 4)
+    @discord.ui.button(label="5", style=discord.ButtonStyle.blurple)
+    async def n5(self, interaction: discord.Interaction, button: discord.ui.Button): await self.chk(interaction, 5)
 
-    @discord.ui.button(label="✂️ مقص", style=discord.ButtonStyle.secondary)
-    async def rps_scissors(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.play_rps(interaction, "مقص")
+    async def chk(self, interaction, num):
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
+            return
+        can, rem = check_cooldown(self.guild_id, self.user_id, "guess")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
+            return
+        set_cooldown(self.guild_id, self.user_id, "guess")
+        
+        embed = discord.Embed(title="🔢 تخمين الرقم", color=discord.Color.dark_blue())
+        if num == self.target:
+            tot = add_points(self.guild_id, self.user_id, 40)
+            embed.description = f"🎉 ممتاز! الرقم الصحيح كان {self.target}، ربحت **40** نقطة! (الرصيد: {tot})"
+        else:
+            embed.description = f"❌ خطأ! الرقم الصحيح كان {self.target}."
+        await interaction.response.edit_message(embed=embed, view=None)
 
-# دالة إرسال قائمة الـ 15 لعبة
-async def send_games_menu(channel):
-    embed = discord.Embed(
-        title="🎮 | قائمة ألعاب السيرفر الكبرى (15 لعبة تفاعلية)",
-        description="جميع الألعاب تعمل **بدون رموز** مباشرة في الشات المخصص للألعاب:\n(ملاحظة: كل لعبة لها وقت انتظار خاص بها مدته دقيقتان عند لعبها)\n",
-        color=discord.Color.blue()
-    )
-    embed.add_field(name="1. 🎡 عجلة الحظ", value="اكتب: `عجلة`", inline=True)
-    embed.add_field(name="2. 🎲 تحدي النرد", value="اكتب: `نرد`", inline=True)
-    embed.add_field(name="3. 📦 فتح الصناديق", value="اكتب: `صناديق`", inline=True)
-    embed.add_field(name="4. ✂️ حجر ورقة مقص", value="اكتب: `مقص`", inline=True)
-    embed.add_field(name="5. 🎯 التخمين الرقمي", value="اكتب: `تخمين [1-10]`", inline=True)
-    embed.add_field(name="6. 🔮 حظك اليوم", value="اكتب: `حظك`", inline=True)
-    embed.add_field(name="7. ⚡ لعبة السرعة", value="اكتب: `تحدي`", inline=True)
-    embed.add_field(name="8. 🧮 لعبة الحساب", value="اكتب: `حساب`", inline=True)
-    embed.add_field(name="9. 🏴‍☠️ كنز الموت", value="اكتب: `كنز`", inline=True)
-    embed.add_field(name="10. ⚽ ضربة جزاء", value="اكتب: `بلنتي`", inline=True)
-    embed.add_field(name="11. 🏀 سلة", value="اكتب: `سلة`", inline=True)
-    embed.add_field(name="12. 🐟 صيد السمك", value="اكتب: `صيد`", inline=True)
-    embed.add_field(name="13. 🏎️ سباق السيارات", value="اكتب: `سباق`", inline=True)
-    embed.add_field(name="14. ⛏️ التنقيب", value="اكتب: `تعدين`", inline=True)
-    embed.add_field(name="15. 🗡️ المبارزة", value="اكتب: `مبارزة`", inline=True)
-    embed.set_footer(text="استمتع باللعب واجمع أكبر عدد من النقاط!")
-    await channel.send(embed=embed)
+# 6. حظك اليوم
+class LuckView(discord.ui.View):
+    def __init__(self, guild_id, user_id):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+        self.user_id = user_id
 
-# 4. الأوامر التفاعلية (بدون رموز)
+    @discord.ui.button(label="🔮 اكشف حظك", style=discord.ButtonStyle.green)
+    async def luck(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
+            return
+        can, rem = check_cooldown(self.guild_id, self.user_id, "luck")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
+            return
+        set_cooldown(self.guild_id, self.user_id, "luck")
+        
+        pr = random.choice([15, 30, 60, 0, 100])
+        embed = discord.Embed(title="🔮 حظك اليوم", color=discord.Color.magenta())
+        if pr > 0:
+            tot = add_points(self.guild_id, self.user_id, pr)
+            embed.description = f"✨ حظك اليوم رائع! ربحت **{pr}** نقطة! (الرصيد: {tot})"
+        else:
+            embed.description = "🌧️ حظك اليوم عاصف، لم تفز بشيء."
+        await interaction.response.edit_message(embed=embed, view=None)
+
+# 7. تحدي السرعة
+class SpeedView(discord.ui.View):
+    def __init__(self, guild_id, user_id):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    @discord.ui.button(label="⚡ اضغط بأقصى سرعة!", style=discord.ButtonStyle.red)
+    async def spd(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
+            return
+        can, rem = check_cooldown(self.guild_id, self.user_id, "speed")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
+            return
+        set_cooldown(self.guild_id, self.user_id, "speed")
+        tot = add_points(self.guild_id, self.user_id, 35)
+        embed = discord.Embed(title="⚡ تحدي السرعة", description=f"🚀 يا أسرع البرق! منحت **35** نقطة! (الرصيد: {tot})", color=discord.Color.red())
+        await interaction.response.edit_message(embed=embed, view=None)
+
+# 8. حساب سريع
+class MathView(discord.ui.View):
+    def __init__(self, guild_id, user_id, ans):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+        self.user_id = user_id
+        self.ans = ans
+
+    @discord.ui.button(label="✅ إجابة صحيحة", style=discord.ButtonStyle.green)
+    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.ans_chk(interaction, True)
+    @discord.ui.button(label="❌ إجابة خاطئة", style=discord.ButtonStyle.red)
+    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.ans_chk(interaction, False)
+
+    async def ans_chk(self, interaction, user_val):
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
+            return
+        can, rem = check_cooldown(self.guild_id, self.user_id, "math")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
+            return
+        set_cooldown(self.guild_id, self.user_id, "math")
+        
+        embed = discord.Embed(title="🧮 لعبة الحساب", color=discord.Color.orange())
+        if user_val == self.ans:
+            tot = add_points(self.guild_id, self.user_id, 45)
+            embed.description = f"🎉 إجابتك ذكية وصحيحة! ربحت **45** نقطة! (الرصيد: {tot})"
+        else:
+            embed.description = "❌ إجابة غير دقيقة، حظاً أوفر."
+        await interaction.response.edit_message(embed=embed, view=None)
+
+# 9. الكنز المفقود
+class TreasureView(discord.ui.View):
+    def __init__(self, guild_id, user_id):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    @discord.ui.button(label="💎 حفر للبحث عن الكنز", style=discord.ButtonStyle.green)
+    async def dig(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
+            return
+        can, rem = check_cooldown(self.guild_id, self.user_id, "treasure")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
+            return
+        set_cooldown(self.guild_id, self.user_id, "treasure")
+        
+        rew = random.choice([50, 100, 0, 150])
+        embed = discord.Embed(title="💎 الكنز المفقود", color=discord.Color.gold())
+        if rew > 0:
+            tot = add_points(self.guild_id, self.user_id, rew)
+            embed.description = f"🏴‍☠️ وجدت صندوق كنز يحتوي على **{rew}** نقطة! (الرصيد: {tot})"
+        else:
+            embed.description = "⛏️ لم تجد سوى الصخور والغبار."
+        await interaction.response.edit_message(embed=embed, view=None)
+
+# 10. بلنتي (ركلة جزاء)
+class PenaltyView(discord.ui.View):
+    def __init__(self, guild_id, user_id):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    @discord.ui.button(label="⚽ تسديد يمين", style=discord.ButtonStyle.blurple)
+    async def r(self, interaction: discord.Interaction, button: discord.ui.Button): await self.kick(interaction, "يمين")
+    @discord.ui.button(label="⚽ تسديد يسار", style=discord.ButtonStyle.blurple)
+    async def l(self, interaction: discord.Interaction, button: discord.ui.Button): await self.kick(interaction, "يسار")
+    @discord.ui.button(label="⚽ تسديد بالمنتصف", style=discord.ButtonStyle.blurple)
+    async def m(self, interaction: discord.Interaction, button: discord.ui.Button): await self.kick(interaction, "منتصف")
+
+    async def kick(self, interaction, dir):
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
+            return
+        can, rem = check_cooldown(self.guild_id, self.user_id, "penalty")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
+            return
+        set_cooldown(self.guild_id, self.user_id, "penalty")
+        
+        gk = random.choice(["يمين", "يسار", "منتصف"])
+        embed = discord.Embed(title="⚽ ركلة جزاء", color=discord.Color.green())
+        if dir != gk:
+            tot = add_points(self.guild_id, self.user_id, 40)
+            embed.description = f"⚽ **هدف ساحق!** الحارس طار للاتجاه الخاطئ ({gk}). ربحت **40** نقطة! (الرصيد: {tot})"
+        else:
+            embed.description = f"🧤 تصدى الحارس للكرة ببراعة!"
+        await interaction.response.edit_message(embed=embed, view=None)
+
+# 11. كرة السلة
+class BasketballView(discord.ui.View):
+    def __init__(self, guild_id, user_id):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    @discord.ui.button(label="🏀 رامية ثلاثية", style=discord.ButtonStyle.orange)
+    async def shoot(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
+            return
+        can, rem = check_cooldown(self.guild_id, self.user_id, "basketball")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
+            return
+        set_cooldown(self.guild_id, self.user_id, "basketball")
+        
+        success = random.choice([True, False, True])
+        embed = discord.Embed(title="🏀 كرة السلة", color=discord.Color.orange())
+        if success:
+            tot = add_points(self.guild_id, self.user_id, 35)
+            embed.description = f"🎯 سلة تاريخية! ثلاث نقاط ذهبية وربحت **35** نقطة! (الرصيد: {tot})"
+        else:
+            embed.description = "❌ اصطدمت الكرة بالحافة وخرجت."
+        await interaction.response.edit_message(embed=embed, view=None)
+
+# 12. صيد السمك
+class FishingView(discord.ui.View):
+    def __init__(self, guild_id, user_id):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    @discord.ui.button(label="🎣 رمي الصنارة", style=discord.ButtonStyle.primary)
+    async def fish(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
+            return
+        can, rem = check_cooldown(self.guild_id, self.user_id, "fishing")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
+            return
+        set_cooldown(self.guild_id, self.user_id, "fishing")
+        
+        catch = random.choice([20, 50, 0, 80])
+        embed = discord.Embed(title="🎣 صيد السمك", color=discord.Color.blue())
+        if catch > 0:
+            tot = add_points(self.guild_id, self.user_id, catch)
+            embed.description = f"🐟 اصطدت سمكة قيمة وربحت **{catch}** نقطة! (الرصيد: {tot})"
+        else:
+            embed.description = "🌊 لم تسحب سوى الأعشاب البحرية."
+        await interaction.response.edit_message(embed=embed, view=None)
+
+# 13. سباق السيارات
+class RacingView(discord.ui.View):
+    def __init__(self, guild_id, user_id):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    @discord.ui.button(label="🏎️ ضغط وقود", style=discord.ButtonStyle.red)
+    async def race(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
+            return
+        can, rem = check_cooldown(self.guild_id, self.user_id, "racing")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
+            return
+        set_cooldown(self.guild_id, self.user_id, "racing")
+        
+        win = random.choice([True, False])
+        embed = discord.Embed(title="🏎️ سباق السيارات", color=discord.Color.dark_red())
+        if win:
+            tot = add_points(self.guild_id, self.user_id, 45)
+            embed.description = f"🏆 قطعت خط النهاية أولاً وربحت **45** نقطة! (الرصيد: {tot})"
+        else:
+            embed.description = "💥 تعطلت سيارتك في المنعطف الأخير."
+        await interaction.response.edit_message(embed=embed, view=None)
+
+# 14. التعدين
+class MiningView(discord.ui.View):
+    def __init__(self, guild_id, user_id):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    @discord.ui.button(label="⛏️ تعدين ذهب", style=discord.ButtonStyle.secondary)
+    async def mine(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
+            return
+        can, rem = check_cooldown(self.guild_id, self.user_id, "mining")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
+            return
+        set_cooldown(self.guild_id, self.user_id, "mining")
+        
+        gold = random.choice([30, 60, 90, 0])
+        embed = discord.Embed(title="⛏️ التعدين", color=discord.Color.dark_gray())
+        if gold > 0:
+            tot = add_points(self.guild_id, self.user_id, gold)
+            embed.description = f"🪙 استخرجت قطع ذهبية بقيمة **{gold}** نقطة! (الرصيد: {tot})"
+        else:
+            embed.description = "🪨 حفرت في صخور صلبة ولم تجد شيئاً."
+        await interaction.response.edit_message(embed=embed, view=None)
+
+# 15. المبارزة
+class DuelView(discord.ui.View):
+    def __init__(self, guild_id, user_id):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    @discord.ui.button(label="⚔️ هجوم بالساحة", style=discord.ButtonStyle.red)
+    async def duel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message("❌ ليس لك!", ephemeral=True)
+            return
+        can, rem = check_cooldown(self.guild_id, self.user_id, "duel")
+        if not can:
+            await interaction.response.send_message(f"⏳ ينتظر {rem}", ephemeral=True)
+            return
+        set_cooldown(self.guild_id, self.user_id, "duel")
+        
+        win = random.choice([True, False])
+        embed = discord.Embed(title="⚔️ ساحة المبارزة", color=discord.Color.blurple())
+        if win:
+            tot = add_points(self.guild_id, self.user_id, 60)
+            embed.description = f"🛡️ انتصرت على خصمك الشرس في المعركة! ربحت **60** نقطة! (الرصيد: {tot})"
+        else:
+            embed.description = "🩸 هُزمت في الساحة، انسحب لتتعافى."
+        await interaction.response.edit_message(embed=embed, view=None)
+
+
+# --- معالجة الأوامر والرسائل والألعاب ---
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -393,369 +676,122 @@ async def on_message(message):
     text_lower = text.lower()
     guild_id = str(message.guild.id)
     user_id = str(message.author.id)
+    config = get_config(guild_id)
 
-    # أ. أمر الدخول
+    # أمر دخول
     if text_lower == "دخول":
-        config = load_data(CONFIG_FILE)
-        records_channel_id = config.get(guild_id, {}).get("records_channel")
-        
-        if records_channel_id and message.channel.id != records_channel_id:
+        if config.get("records_channel") and message.channel.id != config["records_channel"]:
             await message.delete()
-            warn = await message.channel.send(f"❌ عذراً {message.author.mention}, هذا الأمر مخصص فقط في قناة السجلات!")
-            await asyncio.sleep(4)
-            await warn.delete()
             return
-
-        today_date = datetime.now().strftime("%Y-%m-%d")
-        stats = load_data(DATA_FILE)
-        
-        if guild_id not in stats: stats[guild_id] = {}
-        if user_id not in stats[guild_id]: 
-            stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0, "last_checkin": "", "checkins_count": 0, "last_leave": "", "manual_leaves_count": 0}
-        
-        if "checkins_count" not in stats[guild_id][user_id]:
-            stats[guild_id][user_id]["checkins_count"] = 0
-
-        if stats[guild_id][user_id].get("last_checkin") == today_date:
-            await message.channel.send(f"⚠️ يا {message.author.mention}، أنت سجلت دخولك اليوم بالفعل!")
+        today = datetime.now().strftime("%Y-%m-%d")
+        data = get_user_data(guild_id, user_id)
+        if data["last_checkin"] == today:
+            await message.channel.send(f"⚠️ يا {message.author.mention}، سجلت دخولك اليوم مسبقاً!")
         else:
-            stats[guild_id][user_id]["last_checkin"] = today_date
-            stats[guild_id][user_id]["checkins_count"] += 1
-            save_data(stats, DATA_FILE)
-            
-            count = stats[guild_id][user_id]["checkins_count"]
-            await message.channel.send(f"📥 **تم تسجيل الدخول اليومي**\nأهلاً بك يا {message.author.mention}! تم تسجيل حضورك اليوم بنجاح.\nإجمالي مرات الدخول: **{count}**")
+            cnt = data["checkins_count"] + 1
+            update_user_data(guild_id, user_id, last_checkin=today, checkins_count=cnt)
+            await message.channel.send(f"📥 **تم تسجيل الحضور** يا {message.author.mention}!\nالمجموع: **{cnt}**")
 
-    # ب. أمر الخروج اليدوي
+    # أمر خروج
     elif text_lower == "خروج":
-        config = load_data(CONFIG_FILE)
-        records_channel_id = config.get(guild_id, {}).get("records_channel")
-        
-        if records_channel_id and message.channel.id != records_channel_id:
+        if config.get("records_channel") and message.channel.id != config["records_channel"]:
             await message.delete()
-            warn = await message.channel.send(f"❌ عذراً {message.author.mention}, هذا الأمر مخصص فقط في قناة السجلات!")
-            await asyncio.sleep(4)
-            await warn.delete()
             return
-
-        today_date = datetime.now().strftime("%Y-%m-%d")
-        stats = load_data(DATA_FILE)
-        
-        if guild_id not in stats: stats[guild_id] = {}
-        if user_id not in stats[guild_id]: 
-            stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0, "last_checkin": "", "checkins_count": 0, "last_leave": "", "manual_leaves_count": 0}
-        
-        if "manual_leaves_count" not in stats[guild_id][user_id]:
-            stats[guild_id][user_id]["manual_leaves_count"] = 0
-
-        if stats[guild_id][user_id].get("last_leave") == today_date:
-            await message.channel.send(f"⚠️ يا {message.author.mention}، أنت سجلت خروجك اليوم بالفعل!")
+        today = datetime.now().strftime("%Y-%m-%d")
+        data = get_user_data(guild_id, user_id)
+        if data["last_leave"] == today:
+            await message.channel.send(f"⚠️ يا {message.author.mention}، سجلت خروجك اليوم مسبقاً!")
         else:
-            stats[guild_id][user_id]["last_leave"] = today_date
-            stats[guild_id][user_id]["manual_leaves_count"] += 1
-            save_data(stats, DATA_FILE)
-            
-            leave_count = stats[guild_id][user_id]["manual_leaves_count"]
-            await message.channel.send(f"📤 **تم تسجيل الخروج اليومي**\nمع السلامة يا {message.author.mention}! تم تسجيل خروجك اليوم بنجاح.\nإجمالي مرات الخروج: **{leave_count}**")
+            cnt = data["manual_leaves_count"] + 1
+            update_user_data(guild_id, user_id, last_leave=today, manual_leaves_count=cnt)
+            await message.channel.send(f"📤 **تم تسجيل الخروج** يا {message.author.mention}!\nالمجموع: **{cnt}**")
 
-    # ج. أمر السجل (مع دعم المنشن)
+    # أمر سجل
     elif text_lower.startswith("سجل"):
-        config = load_data(CONFIG_FILE)
-        records_channel_id = config.get(guild_id, {}).get("records_channel")
-        
-        if records_channel_id and message.channel.id != records_channel_id:
+        if config.get("records_channel") and message.channel.id != config["records_channel"]:
             await message.delete()
-            warn = await message.channel.send(f"❌ عذراً {message.author.mention}, هذا الأمر مخصص فقط في قناة السجلات!")
-            await asyncio.sleep(4)
-            await warn.delete()
             return
-
-        target_user = message.mentions[0] if message.mentions else message.author
-        target_id = str(target_user.id)
-
-        stats = load_data(DATA_FILE)
-        user_data = stats.get(guild_id, {}).get(target_id, {"joins": 0, "leaves": 0, "points": 0, "checkins_count": 0, "manual_leaves_count": 0})
-        
-        checkins = user_data.get('checkins_count', 0)
-        manual_leaves = user_data.get('manual_leaves_count', 0)
-        
-        embed = discord.Embed(
-            title=f"📊 سجل دخول وخروج العضو {target_user.display_name}",
-            color=discord.Color.green()
-        )
-        embed.set_thumbnail(url=target_user.display_avatar.url)
-        embed.add_field(name="📥 مرات الدخول", value=f"**{checkins}**", inline=False)
-        embed.add_field(name="📤 مرات الخروج", value=f"**{manual_leaves}**", inline=False)
-        
+        target = message.mentions[0] if message.mentions else message.author
+        data = get_user_data(guild_id, target.id)
+        embed = discord.Embed(title=f"📊 سجل الحضور لـ {target.display_name}", color=discord.Color.green())
+        embed.set_thumbnail(url=target.display_avatar.url)
+        embed.add_field(name="📥 الدخول", value=f"**{data['checkins_count']}**", inline=False)
+        embed.add_field(name="📤 الخروج", value=f"**{data['manual_leaves_count']}**", inline=False)
         await message.channel.send(embed=embed)
 
-    # د. فحص النقاط
+    # أمر نقاطي
     elif text_lower == "نقاطي":
-        stats = load_data(DATA_FILE)
-        points = stats.get(guild_id, {}).get(user_id, {}).get("points", 0)
-        await message.channel.send(f"💰 رصيدك الحالي يا {message.author.mention}: **{points}** نقطة.")
+        data = get_user_data(guild_id, user_id)
+        await message.channel.send(f"💰 رصيدك الحالي يا {message.author.mention}: **{data['points']}** نقطة.")
 
-    # هـ. ألعاب السيرفر الـ 15 (بدون رموز)
+    # أمر التوب (أكثر الأعضاء نقاطاً)
+    elif text_lower in ["توب", "!top", "top"]:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, points FROM users WHERE guild_id = ? ORDER BY points DESC LIMIT 10", (guild_id,))
+        top_users = cursor.fetchall()
+        conn.close()
+
+        embed = discord.Embed(title="🏆 قائمة لوحة الشرف (Top 10)", description="أكثر الأعضاء جمعاً للننقاط في السيرفر:", color=discord.Color.gold())
+        
+        if not top_users:
+            embed.description = "لا توجد أي بيانات مسجلة حتى الآن."
+        else:
+            description_lines = []
+            medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+            for index, (u_id, pts) in enumerate(top_users):
+                member = message.guild.get_member(int(u_id))
+                name = member.display_name if member else f"مغادر ({u_id})"
+                medal = medals[index] if index < len(medals) else f"•"
+                description_lines.append(f"{medal} **{name}** — `{pts}` نقطة")
+            embed.description = "\n".join(description_lines)
+
+        await message.channel.send(embed=embed)
+
+    # تشغيل الألعاب الـ 15 التفاعلية
     else:
-        game_keywords = ["عجلة", "نرد", "زهر", "صناديق", "كنز", "مقص", "تخمين", "حظك", "الالعاب", "تحدي", "حساب", "بلنتي", "سلة", "صيد", "سباق", "تعدين", "مبارزة"]
-        matched = False
-        for kw in game_keywords:
-            if text_lower == kw or text_lower.startswith(kw + " "):
-                matched = True
-                break
-                
-        if matched:
-            config = load_data(CONFIG_FILE)
-            games_channel_id = config.get(guild_id, {}).get("games_channel")
-            
-            if games_channel_id and message.channel.id != games_channel_id:
-                await message.delete()
-                warn = await message.channel.send(f"❌ عذراً {message.author.mention}, الألعاب مخصصة فقط في قناة الألعاب!")
-                await asyncio.sleep(4)
-                await warn.delete()
-                return
+        if config.get("games_channel") and message.channel.id != config["games_channel"]:
+            pass
 
-            if text_lower == "الالعاب":
-                await send_games_menu(message.channel)
-                return
-
-            # 1. لعبة العجلة التفاعلية
-            if text_lower == "عجلة":
-                can_play, rem_time = check_cooldown(guild_id, user_id, "wheel")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب لعبة العجلة مرة أخرى!")
-                    return
-                embed = discord.Embed(title="🎡 | عجلة الحظ الكبرى", description=f"يا هلا يا {message.author.mention}, اضغط على الزر بالأسفل لتدوير العجلة وبدء التشويق!", color=discord.Color.gold())
-                view = WheelView(guild_id, user_id)
-                await message.channel.send(embed=embed, view=view)
-
-            # 2. لعبة النرد التفاعلي بأزرار
-            elif text_lower in ["نرد", "زهر"]:
-                can_play, rem_time = check_cooldown(guild_id, user_id, "dice")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب لعبة النرد مرة أخرى!")
-                    return
-                embed = discord.Embed(title="🎲 | تحدي النرد", description=f"يا {message.author.mention}, اضغط على الزر بالأسفل لرمي النرد ومنافسة البوت!", color=discord.Color.blue())
-                view = DiceView(guild_id, user_id)
-                await message.channel.send(embed=embed, view=view)
-
-            elif text_lower == "صناديق":
-                can_play, rem_time = check_cooldown(guild_id, user_id, "boxes")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تفتح الصناديق مرة أخرى!")
-                    return
-                embed = discord.Embed(title="📦 | فتح الصناديق السرية", description=f"يا {message.author.mention}, اختر أحد الصناديق الثلاثة بحذر واكتشف ما بداخله!", color=discord.Color.purple())
-                view = BoxView(guild_id, user_id)
-                await message.channel.send(embed=embed, view=view)
-
-            elif text_lower == "مقص":
-                can_play, rem_time = check_cooldown(guild_id, user_id, "rps")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب حجر ورقة مقص مرة أخرى!")
-                    return
-                embed = discord.Embed(title="✂️ | حجر، ورقة، مقص", description=f"يا {message.author.mention}, اختر حركتك من الأزرار بالأسفل لتتحدى البوت:", color=discord.Color.orange())
-                view = RPSView(guild_id, user_id)
-                await message.channel.send(embed=embed, view=view)
-
-            elif text_lower.startswith("تخمين"):
-                can_play, rem_time = check_cooldown(guild_id, user_id, "guess")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب التخمين مرة أخرى!")
-                    return
-                parts = text.split()
-                if len(parts) < 2 or not parts[1].isdigit():
-                    await message.channel.send("⚠️ الاستخدام الصحيح:\n`تخمين 7` (اختر رقماً من 1 إلى 10)")
-                    return
-                number = int(parts[1])
-                if not (1 <= number <= 10):
-                    await message.channel.send("⚠️ أرجو اختيار رقم بين 1 و 10 فقط!")
-                    return
-                set_cooldown(guild_id, user_id, "guess")
-                secret = random.randint(1, 10)
-                if number == secret:
-                    total = add_points(guild_id, user_id, 100)
-                    await message.channel.send(f"🎯 كفووو يا {message.author.mention}! الرقم الصحيح كان **{secret}**، ربحت جائزة كبرى **100 نقطة**! (الرصيد: {total})")
-                else:
-                    await message.channel.send(f"❌ للأسف تخمينك خطأ. الرقم الصحيح كان **{secret}**، حظاً أوفر!")
-
-            elif text_lower in ["حظك", "حظك_اليوم"]:
-                can_play, rem_time = check_cooldown(guild_id, user_id, "fortune")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تستخرج حظك مرة أخرى!")
-                    return
-                set_cooldown(guild_id, user_id, "fortune")
-                fortunes = [
-                    ("حظك ممتاز اليوم! ربحت 60 نقطة.", 60),
-                    ("يومك سعيد، استمتع بـ 30 نقطة.", 30),
-                    ("الأمور عادية، خذ 10 نقاط.", 10),
-                    ("اليوم يحمل لك مفاجأة! ربحت 80 نقطة.", 80),
-                    ("حظك سيء اليوم، ما ربحت شيء.", 0)
-                ]
-                text_result, prize = random.choice(fortunes)
-                total = add_points(guild_id, user_id, prize)
-                embed = discord.Embed(title="🔮 | طالع حظك اليوم", description=f"{message.author.mention}\n{text_result}\n\n💰 رصيدك الإجمالي: **{total} نقطة**", color=discord.Color.teal())
-                await message.channel.send(embed=embed)
-
-            elif text_lower == "تحدي":
-                can_play, rem_time = check_cooldown(guild_id, user_id, "speed")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تدخل تحدي السرعة مرة أخرى!")
-                    return
-                set_cooldown(guild_id, user_id, "speed")
-                words = ["ديسكورد", "برمجة", "بايثون", "سيرفر", "تحدي", "سرعة"]
-                target_word = random.choice(words)
-                await message.channel.send(f"🎮 **لعبة السرعة!** أسرع شخص يكتب الكلمة التالية يربح 50 نقطة:\n`{target_word}`")
-                def check(m):
-                    return m.content == target_word and m.channel == message.channel and not m.author.bot
-                try:
-                    msg = await bot.wait_for('message', timeout=15.0, check=check)
-                except asyncio.TimeoutError:
-                    await message.channel.send("⏰ انتهى الوقت!")
-                else:
-                    total = add_points(msg.guild.id, msg.author.id, 50)
-                    await message.channel.send(f"🏆 مبروك يا {msg.author.mention}! ربحت **50 نقطة**! (الرصيد: {total})")
-
-            elif text_lower == "حساب":
-                can_play, rem_time = check_cooldown(guild_id, user_id, "math")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تلعب لعبة الحساب مرة أخرى!")
-                    return
-                set_cooldown(guild_id, user_id, "math")
-                num1 = random.randint(1, 10)
-                num2 = random.randint(1, 10)
-                answer = num1 + num2
-                await message.channel.send(f"🧮 أسرع شخص يحل العملية:\n`{num1} + {num2} = ?` (معك 15 ثانية وربحك 30 نقطة)")
-                def check(m):
-                    return m.content.isdigit() and int(m.content) == answer and m.channel == message.channel and not m.author.bot
-                try:
-                    msg = await bot.wait_for('message', timeout=15.0, check=check)
-                except asyncio.TimeoutError:
-                    await message.channel.send(f"⏰ انتهى الوقت! الإجابة كانت: **{answer}**")
-                else:
-                    total = add_points(msg.guild.id, msg.author.id, 30)
-                    await message.channel.send(f"🏆 بطل الرياضيات يا {msg.author.mention}! ربحت **30 نقطة**! (الرصيد: {total})")
-
-            elif text_lower == "كنز":
-                can_play, rem_time = check_cooldown(guild_id, user_id, "treasure")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تدخل مغامرة الكنز مرة أخرى!")
-                    return
-                set_cooldown(guild_id, user_id, "treasure")
-                won = random.choice([0, 70, 120, -30])
-                total = add_points(guild_id, user_id, won)
-                embed = discord.Embed(title="🏴‍☠️ | مغامرة الكنز الملعون", color=discord.Color.dark_gold())
-                if won > 0:
-                    embed.description = f"💰 يا له من حظ! عثرت على صندوق كنز يحتوي على **{won} نقطة**.\n• رصيدك: {total}"
-                elif won < 0:
-                    embed.description = f"💣 وقعت في فخ مفخخ وخسرت **{abs(won)} نقطة**.\n• رصيدك: {total}"
-                else:
-                    embed.description = "💨 الكنز كان فارغاً ولم تجد شيئاً!"
-                await message.channel.send(embed=embed)
-
-            elif text_lower == "بلنتي":
-                can_play, rem_time = check_cooldown(guild_id, user_id, "penalty")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تشاوت ضربة جزاء مرة أخرى!")
-                    return
-                set_cooldown(guild_id, user_id, "penalty")
-                results = ["goal", "saved", "out"]
-                res = random.choice(results)
-                embed = discord.Embed(title="⚽ | ركلة جزاء حاسمة", color=discord.Color.green())
-                if res == "goal":
-                    total = add_points(guild_id, user_id, 45)
-                    embed.description = f"⚽ تسديدة صاروخية في الشباك! هدف! ربحت **45 نقطة** (الرصيد: {total})"
-                elif res == "saved":
-                    embed.description = "🧤 الحارس تصدى للكرة ببرعة! ضاعت الركلة."
-                else:
-                    embed.description = "✈️ الكرة مرت جوار القائم إلى خارج الملعب!"
-                await message.channel.send(embed=embed)
-
-            elif text_lower == "سلة":
-                can_play, rem_time = check_cooldown(guild_id, user_id, "basket")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر ترمي السلة مرة أخرى!")
-                    return
-                set_cooldown(guild_id, user_id, "basket")
-                scored = random.choice([True, False])
-                embed = discord.Embed(title="🏀 | رمية ثلاثية", color=discord.Color.orange())
-                if scored:
-                    total = add_points(guild_id, user_id, 40)
-                    embed.description = f"🎯 يا سِلااام! الكرة في السلة من منتصف الملعب! ربحت **40 نقطة** (الرصيد: {total})"
-                else:
-                    embed.description = "❌ اصطدمت الكرة بالحلقة وخرجت!"
-                await message.channel.send(embed=embed)
-
-            elif text_lower == "صيد":
-                can_play, rem_time = check_cooldown(guild_id, user_id, "fishing")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تصيد سمك مرة أخرى!")
-                    return
-                set_cooldown(guild_id, user_id, "fishing")
-                catch = random.choice(["سمكة ذهبية", "سمكة عادية", "حذاء قديم", "صندوق زجاجي"])
-                p_map = {"سمكة ذهبية": 60, "سمكة عادية": 25, "حذاء قديم": 0, "صندوق زجاجي": 90}
-                won = p_map[catch]
-                total = add_points(guild_id, user_id, won)
-                await message.channel.send(f"🎣 سحبت سنارتك من الماء وطلع معك: **{catch}**! ربحت **{won} نقطة** (الرصيد: {total})")
-
-            elif text_lower == "سباق":
-                can_play, rem_time = check_cooldown(guild_id, user_id, "race")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تدخل سباق السيارات مرة أخرى!")
-                    return
-                set_cooldown(guild_id, user_id, "race")
-                cars = ["🏎️ فيراري", "🚗 بورش", "🚙 لبرجيني"]
-                winner = random.choice(cars)
-                total = add_points(guild_id, user_id, 50)
-                await message.channel.send(f"🏁 انتهى السباق بفوز السيارة: **{winner}**! تم منحك **50 نقطة** مشاركة (الرصيد: {total})")
-
-            elif text_lower == "تعدين":
-                can_play, rem_time = check_cooldown(guild_id, user_id, "mining")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تنقب مرة أخرى!")
-                    return
-                set_cooldown(guild_id, user_id, "mining")
-                minerals = ["💎 الماس", "🪙 ذهب", "🪨 حجر عادي"]
-                m_pts = {"💎 الماس": 100, "🪙 ذهب": 50, "🪨 حجر عادي": 5}
-                found = random.choice(minerals)
-                won = m_pts[found]
-                total = add_points(guild_id, user_id, won)
-                await message.channel.send(f"⛏️ نقبت في الصخور واستخرجت: **{found}**! ربحت **{won} نقطة** (الرصيد: {total})")
-
-            elif text_lower == "مبارزة":
-                can_play, rem_time = check_cooldown(guild_id, user_id, "duel")
-                if not can_play:
-                    await message.channel.send(f"⏳ يا {message.author.mention}، يجب عليك الانتظار **{rem_time}** لتقدر تدخل مبارزة مرة أخرى!")
-                    return
-                set_cooldown(guild_id, user_id, "duel")
-                won = random.choice([True, False])
-                embed = discord.Embed(title="🗡️ | مبارزة الفرسان", color=discord.Color.dark_red())
-                if won:
-                    total = add_points(guild_id, user_id, 70)
-                    embed.description = f"⚔️ انتصرت على خصمك في المعركة ببراعة! ربحت **70 نقطة** (الرصيد: {total})"
-                else:
-                    embed.description = "🛡️ هزمك الخصم في النزال وأجبرك على الانسحاب!"
-                await message.channel.send(embed=embed)
+        if text_lower == "عجلة":
+            await message.channel.send(embed=discord.Embed(title="🎡 عجلة الحظ الكبرى", description=f"يا {message.author.mention}, اضغط للتدوير:", color=discord.Color.gold()), view=WheelView(guild_id, user_id))
+        elif text_lower in ["نرد", "زهر"]:
+            await message.channel.send(embed=discord.Embed(title="🎲 تحدي النرد", description=f"يا {message.author.mention}, اضغط للرمي:", color=discord.Color.blue()), view=DiceView(guild_id, user_id))
+        elif text_lower == "صناديق":
+            await message.channel.send(embed=discord.Embed(title="📦 فتح الصناديق", description=f"يا {message.author.mention}, اختر صندوقاً:", color=discord.Color.purple()), view=BoxesView(guild_id, user_id))
+        elif text_lower in ["مقص", "حجر ورقة مقص"]:
+            await message.channel.send(embed=discord.Embed(title="✂️ حجر ورقة مقص", description=f"يا {message.author.mention}, اختر سلاحك:", color=discord.Color.teal()), view=RpsView(guild_id, user_id))
+        elif text_lower == "تخمين":
+            await message.channel.send(embed=discord.Embed(title="🔢 تخمين الرقم (من 1 إلى 5)", description=f"يا {message.author.mention}, خمن الرقم الصحيح:", color=discord.Color.dark_blue()), view=GuessView(guild_id, user_id))
+        elif text_lower == "حظك":
+            await message.channel.send(embed=discord.Embed(title="🔮 حظك اليوم", description=f"يا {message.author.mention}, اكتشف حظك:", color=discord.Color.magenta()), view=LuckView(guild_id, user_id))
+        elif text_lower == "تحدي السرعة":
+            await message.channel.send(embed=discord.Embed(title="⚡ تحدي السرعة", description=f"يا {message.author.mention}, اثبت سرعتك:", color=discord.Color.red()), view=SpeedView(guild_id, user_id))
+        elif text_lower == "حساب":
+            n1, n2 = random.randint(1, 20), random.randint(1, 20)
+            res = n1 + n2
+            is_true = random.choice([True, False])
+            fake_res = res if is_true else res + random.choice([-2, 2, 3])
+            await message.channel.send(embed=discord.Embed(title="🧮 لعبة الحساب السريع", description=f"يا {message.author.mention}, هل المعادلة التالية صحيحة؟\n**{n1} + {n2} = {fake_res}**", color=discord.Color.orange()), view=MathView(guild_id, user_id, is_true))
+        elif text_lower == "كنز":
+            await message.channel.send(embed=discord.Embed(title="💎 الكنز المفقود", description=f"يا {message.author.mention}, ابدأ الحفر:", color=discord.Color.gold()), view=TreasureView(guild_id, user_id))
+        elif text_lower == "بلنتي":
+            await message.channel.send(embed=discord.Embed(title="⚽ ركلة جزاء", description=f"يا {message.author.mention}, اختر زاوية التسديد:", color=discord.Color.green()), view=PenaltyView(guild_id, user_id))
+        elif text_lower == "سلة":
+            await message.channel.send(embed=discord.Embed(title="🏀 كرة السلة", description=f"يا {message.author.mention}, صوب السلة:", color=discord.Color.orange()), view=BasketballView(guild_id, user_id))
+        elif text_lower == "صيد":
+            await message.channel.send(embed=discord.Embed(title="🎣 صيد السمك", description=f"يا {message.author.mention}, ارمِ الصنارة:", color=discord.Color.blue()), view=FishingView(guild_id, user_id))
+        elif text_lower == "سيارات":
+            await message.channel.send(embed=discord.Embed(title="🏎️ سباق السيارات", description=f"يا {message.author.mention}, انطلق بالسباق:", color=discord.Color.dark_red()), view=RacingView(guild_id, user_id))
+        elif text_lower == "تعدين":
+            await message.channel.send(embed=discord.Embed(title="⛏️ التعدين", description=f"يا {message.author.mention}, ابدأ التنقيب:", color=discord.Color.dark_gray()), view=MiningView(guild_id, user_id))
+        elif text_lower == "مبارزة":
+            await message.channel.send(embed=discord.Embed(title="⚔️ ساحة المبارزة", description=f"يا {message.author.mention}, ادخل المبارزة:", color=discord.Color.blurple()), view=DuelView(guild_id, user_id))
 
     await bot.process_commands(message)
 
-# دالة تحميل الملفات الخارجية تلقائياً
-async def load_extensions():
-    for filename in os.listdir("./"):
-        if filename.endswith(".py") and filename != "main.py":
-            extension_name = filename[:-3]
-            try:
-                await bot.load_extension(extension_name)
-            except Exception as e:
-                pass
-
 if __name__ == "__main__":
     keep_alive()
-    
-    try:
-        asyncio.run(load_extensions())
-    except Exception:
-        pass
-    
     token = os.getenv("DISCORD_TOKEN")
     if token:
         bot.run(token)
