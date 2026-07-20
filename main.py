@@ -318,10 +318,27 @@ async def on_message(message):
                 await message.channel.send(f"🏆 بطل الرياضيات يا {msg.author.mention}! ربحت **30 نقطة**!")
 
     await bot.process_commands(message)
+# دالة تحميل الملفات الخارجية
+async def load_extensions():
+    try:
+        await bot.load_extension("commands")
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     keep_alive()
     
+    try:
+        asyncio.run(load_extensions())
+    except Exception:
+        pass
+    
+    token = os.getenv("DISCORD_TOKEN")
+    if token:
+        bot.run(token)
+    else:
+        print("خطأ: التوكن غير موجود!")
+   
     token = os.getenv("DISCORD_TOKEN")
     if token:
         bot.run(token)
