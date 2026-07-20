@@ -117,6 +117,16 @@ async def set_games(ctx):
     save_data(config, CONFIG_FILE)
     await ctx.send("✅ تم تعيين هذه القناة **للألعاب** بنجاح!")
 
+@bot.command(name="تحديد_السجلات")
+@commands.has_permissions(administrator=True)
+async def set_records(ctx):
+    config = load_data(CONFIG_FILE)
+    guild_id = str(ctx.guild.id)
+    if guild_id not in config: config[guild_id] = {}
+    config[guild_id]["records_channel"] = ctx.channel.id
+    save_data(config, CONFIG_FILE)
+    await ctx.send("✅ تم تعيين هذه القناة **لسجلات الدخول اليومي** بنجاح!")
+
 # 4. الأوامر التفاعلية الكاملة (بدون أي رموز)
 @bot.event
 async def on_message(message):
@@ -127,51 +137,61 @@ async def on_message(message):
     guild_id = str(message.guild.id)
     user_id = str(message.author.id)
 
-    # أ. أمر تسجيل الحضور اليومي (دخول) زي الصورة بالضبط
-    if text == "دخول":
-        today_date = datetime.now().strftime("%Y-%m-%d")
-        stats = load_data(DATA_FILE)
+    # أ. أمر تسجيل الحضور اليومي (دخول) وأمر السجل (مقيدين بقناة السجلات المحددة)
+    if text in ["دخول", "سجل"]:
+        config = load_data(CONFIG_FILE)
+        records_channel_id = config.get(guild_id, {}).get("records_channel")
         
-        if guild_id not in stats: stats[guild_id] = {}
-        if user_id not in stats[guild_id]: 
-            stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0, "last_checkin": "", "checkins_count": 0}
-        
-        if "checkins_count" not in stats[guild_id][user_id]:
-            stats[guild_id][user_id]["checkins_count"] = 0
+        if records_channel_id and message.channel.id != records_channel_id:
+            await message.delete()
+            warn = await message.channel.send(f"❌ عذراً {message.author.mention}, أوامر السجلات مخصصة فقط في قناة السجلات!")
+            await asyncio.sleep(4)
+            await warn.delete()
+            return
 
-        # التحقق إذا سجل حضور اليوم من قبل
-        if stats[guild_id][user_id].get("last_checkin") == today_date:
-            await message.channel.send(f"⚠️ يا {message.author.mention}، أنت سجلت دخولك اليوم بالفعل!")
-        else:
-            stats[guild_id][user_id]["last_checkin"] = today_date
-            stats[guild_id][user_id]["checkins_count"] += 1
-            save_data(stats, DATA_FILE)
+        if text == "دخول":
+            today_date = datetime.now().strftime("%Y-%m-%d")
+            stats = load_data(DATA_FILE)
             
-            count = stats[guild_id][user_id]["checkins_count"]
-            await message.channel.send(f"📥 **تم تسجيل الدخول اليومي**\nأهلاً بك يا {message.author.mention}! تم تسجيل حضورك اليوم بنجاح.\nإجمالي مرات الدخول: **{count}**")
+            if guild_id not in stats: stats[guild_id] = {}
+            if user_id not in stats[guild_id]: 
+                stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0, "last_checkin": "", "checkins_count": 0}
+            
+            if "checkins_count" not in stats[guild_id][user_id]:
+                stats[guild_id][user_id]["checkins_count"] = 0
 
-    # ب. أمر السجل (يعرض إحصائيات العضو زي الصورة)
-    elif text == "سجل":
-        stats = load_data(DATA_FILE)
-        user_data = stats.get(guild_id, {}).get(user_id, {"joins": 0, "leaves": 0, "points": 0, "checkins_count": 0})
-        
-        embed = discord.Embed(
-            title=f"📊 سجل دخولك وخروجوك يا {message.author.display_name}",
-            color=discord.Color.green()
-        )
-        embed.set_thumbnail(url=message.author.display_avatar.url)
-        embed.add_field(name="📥 مرات الدخول", value=f"**{user_data.get('checkins_count', user_data.get('joins', 0))}**", inline=False)
-        embed.add_field(name="📤 مرات الخروج", value=f"**{user_data.get('leaves', 0)}**", inline=False)
-        
-        await message.channel.send(embed=embed)
+            # التحقق إذا سجل حضور اليوم من قبل
+            if stats[guild_id][user_id].get("last_checkin") == today_date:
+                await message.channel.send(f"⚠️ يا {message.author.mention}، أنت سجلت دخولك اليوم بالفعل!")
+            else:
+                stats[guild_id][user_id]["last_checkin"] = today_date
+                stats[guild_id][user_id]["checkins_count"] += 1
+                save_data(stats, DATA_FILE)
+                
+                count = stats[guild_id][user_id]["checkins_count"]
+                await message.channel.send(f"📥 **تم تسجيل الدخول اليومي**\nأهلاً بك يا {message.author.mention}! تم تسجيل حضورك اليوم بنجاح.\nإجمالي مرات الدخول: **{count}**")
 
-    # ج. فحص النقاط
+        elif text == "سجل":
+            stats = load_data(DATA_FILE)
+            user_data = stats.get(guild_id, {}).get(user_id, {"joins": 0, "leaves": 0, "points": 0, "checkins_count": 0})
+            
+            embed = discord.Embed(
+                title=f"📊 سجل دخولك وخروجوك يا {message.author.display_name}",
+                color=discord.Color.green()
+            )
+            embed.set_thumbnail(url=message.author.display_avatar.url)
+            embed.add_field(name="📥 مرات الدخول", value=f"**{user_data.get('checkins_count', user_data.get('joins', 0))}**", inline=False)
+            embed.add_field(name="📤 مرات الخروج", value=f"**{user_data.get('leaves', 0)}**", inline=False)
+            
+            await message.channel.send(embed=embed)
+
+    # ب. فحص النقاط
     elif text == "نقاطي":
         stats = load_data(DATA_FILE)
         points = stats.get(guild_id, {}).get(user_id, {}).get("points", 0)
         await message.channel.send(f"💰 رصيدك الحالي يا {message.author.mention}: **{points}** نقطة.")
 
-    # د. ألعاب التحدي والحساب
+    # ج. ألعاب التحدي والحساب
     elif text in ["تحدي", "حساب"]:
         config = load_data(CONFIG_FILE)
         games_channel_id = config.get(guild_id, {}).get("games_channel")
