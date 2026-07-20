@@ -2,6 +2,7 @@ import os
 import json
 import discord
 from discord.ext import commands
+from datetime import datetime
 
 # إعداد البوت والـ Intents
 intents = discord.Intents.default()
@@ -46,7 +47,7 @@ async def set_log_channel(ctx, channel: discord.TextChannel = None):
     config[guild_id]["allowed_channel"] = channel.id
     save_data(config, CONFIG_FILE)
     
-    await ctx.send(f"✅ تم تحديد القناة {channel.mention} لتلقي أسباب الترحيب وأوامر السجل.")
+    await ctx.send(f"✅ تم تحديد القناة {channel.mention} لتلقي الترحيب وأوامر السجل.")
 
 # تتبع دخول الاعضاء + إرسال الترحيب
 @bot.event
@@ -54,17 +55,15 @@ async def on_member_join(member):
     guild_id = str(member.guild.id)
     user_id = str(member.id)
     
-    # 1. تحديث الإحصائيات
     stats = load_data(DATA_FILE)
     if guild_id not in stats:
         stats[guild_id] = {}
     if user_id not in stats[guild_id]:
-        stats[guild_id][user_id] = {"joins": 0, "leaves": 0}
+        stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "last_join": "", "last_leave": ""}
         
     stats[guild_id][user_id]["joins"] += 1
     save_data(stats, DATA_FILE)
 
-    # 2. إرسال رسالة الترحيب في القناة المحددة
     config = load_data(CONFIG_FILE)
     if guild_id in config and "allowed_channel" in config[guild_id]:
         channel_id = config[guild_id]["allowed_channel"]
@@ -72,7 +71,7 @@ async def on_member_join(member):
         if channel:
             embed = discord.Embed(
                 title=f"👋 أهلاً وسهلاً بك يا {member.display_name}!",
-                description=f"أنورت السيرفر بنضمامك معنا! ❤️\nأنت العضو رقم **{member.guild.member_count}** في السيرفر.",
+                description=f"أنورت السيرفر بانضمامك معنا! ❤️\nأنت العضو رقم **{member.guild.member_count}** في السيرفر.",
                 color=discord.Color.green()
             )
             embed.set_thumbnail(url=member.display_avatar.url)
@@ -88,79 +87,12 @@ async def on_member_remove(member):
     if guild_id not in stats:
         stats[guild_id] = {}
     if user_id not in stats[guild_id]:
-        stats[guild_id][user_id] = {"joins": 0, "leaves": 0}
+        stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "last_join": "", "last_leave": ""}
         
     stats[guild_id][user_id]["leaves"] += 1
     save_data(stats, DATA_FILE)
 
-# التقاط رسائل "سجل" أو "السجل" مع دعم المنشن
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    text = message.content.strip().lower()
-
-    if text.startswith("سجل") or text.startswith("السجل"):
-        guild_id = str(message.guild.id)
-        config = load_data(CONFIG_FILE)
-        allowed_channel = config.get(guild_id, {}).get("allowed_channel")
-
-        # التأكد من القناة المحددة
-        if allowed_channel and message.channel.id != allowed_channel:
-            return
-
-        stats = load_data(DATA_FILE)
-
-        # 1. إذا كان فيه منشن لشخص آخر
-        if message.mentions:
-            target_user = message.mentions[0]
-            target_id = str(target_user.id)
-            
-            user_data = stats.get(guild_id, {}).get(target_id, {"joins": 0, "leaves": 0})
-            joins = user_data.get("joins", 0)
-            leaves = user_data.get("leaves", 0)
-
-            embed = discord.Embed(
-                title=f"📊 سجل دخول وخروج: {target_user.display_name}",
-                color=discord.Color.blue()
-            )
-            embed.set_thumbnail(url=target_user.display_avatar.url)
-            embed.add_field(name="📥 مرات الدخول", value=f"**{joins}**", inline=True)
-            embed.add_field(name="📤 مرات الخروج", value=f"**{leaves}**", inline=True)
-            
-            await message.channel.send(embed=embed)
-
-        # 2. إذا كتب "سجل" فقط ليعرض سجله الخاص
-        elif text in ["سجل", "السجل"]:
-            user_id = str(message.author.id)
-            
-            user_data = stats.get(guild_id, {}).get(user_id, {"joins": 0, "leaves": 0})
-            joins = user_data.get("joins", 0)
-            leaves = user_data.get("leaves", 0)
-
-            embed = discord.Embed(
-                title=f"📊 سجل دخولك وخروجك يا {message.author.display_name}",
-                color=discord.Color.green()
-            )
-            embed.set_thumbnail(url=message.author.display_avatar.url)
-            embed.add_field(name="📥 مرات الدخول", value=f"**{joins}**", inline=True)
-            embed.add_field(name="📤 مرات الخروج", value=f"**{leaves}**", inline=True)
-
-            await message.channel.send(embed=embed)
-        # التقاط أزرار أو كلمات الدخول والخروج
-                if text in ["تسجيل دخول", "دخول"]:
-            await check_daily_register(message, "join")
-            return
-
-                if text in ["تسجيل خروج", "خروج"]:
-            await check_daily_register(message, "leave")
-            return
-
-    await bot.process_commands(message)
-# أوامر تسجيل الدخول والخروج اليومية
-from datetime import datetime
-
+# دالة فحص التسجيل اليومي
 async def check_daily_register(message, action_type):
     guild_id = str(message.guild.id)
     user_id = str(message.author.id)
@@ -202,7 +134,74 @@ async def check_daily_register(message, action_type):
         )
         await message.channel.send(embed=embed)
 
-# تشغيل البوت باستخدام التوكن من الـ Environment Variable
+# التقاط الرسائل والأوامر
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    text = message.content.strip().lower()
+
+    # أوامر تسجيل الدخول أو الخروج اليومية
+    if text in ["تسجيل دخول", "دخول"]:
+        await check_daily_register(message, "join")
+        return
+
+    if text in ["تسجيل خروج", "خروج"]:
+        await check_daily_register(message, "leave")
+        return
+
+    # أوامر عرض السجل (سجل / سجل @منشن)
+    if text.startswith("سجل") or text.startswith("السجل"):
+        guild_id = str(message.guild.id)
+        config = load_data(CONFIG_FILE)
+        allowed_channel = config.get(guild_id, {}).get("allowed_channel")
+
+        if allowed_channel and message.channel.id != allowed_channel:
+            return
+
+        stats = load_data(DATA_FILE)
+
+        # إذا كان فيه منشن لشخص آخر
+        if message.mentions:
+            target_user = message.mentions[0]
+            target_id = str(target_user.id)
+            
+            user_data = stats.get(guild_id, {}).get(target_id, {"joins": 0, "leaves": 0})
+            joins = user_data.get("joins", 0)
+            leaves = user_data.get("leaves", 0)
+
+            embed = discord.Embed(
+                title=f"📊 سجل دخول وخروج: {target_user.display_name}",
+                color=discord.Color.blue()
+            )
+            embed.set_thumbnail(url=target_user.display_avatar.url)
+            embed.add_field(name="📥 مرات الدخول", value=f"**{joins}**", inline=True)
+            embed.add_field(name="📤 مرات الخروج", value=f"**{leaves}**", inline=True)
+            
+            await message.channel.send(embed=embed)
+
+        # إذا كتب سجل فقط
+        elif text in ["سجل", "السجل"]:
+            user_id = str(message.author.id)
+            
+            user_data = stats.get(guild_id, {}).get(user_id, {"joins": 0, "leaves": 0})
+            joins = user_data.get("joins", 0)
+            leaves = user_data.get("leaves", 0)
+
+            embed = discord.Embed(
+                title=f"📊 سجل دخولك وخروجك يا {message.author.display_name}",
+                color=discord.Color.green()
+            )
+            embed.set_thumbnail(url=message.author.display_avatar.url)
+            embed.add_field(name="📥 مرات الدخول", value=f"**{joins}**", inline=True)
+            embed.add_field(name="📤 مرات الخروج", value=f"**{leaves}**", inline=True)
+
+            await message.channel.send(embed=embed)
+
+    await bot.process_commands(message)
+
+# تشغيل البوت عبر متغير البيئة
 token = os.getenv("DISCORD_TOKEN")
 if token:
     bot.run(token)
