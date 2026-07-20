@@ -170,6 +170,14 @@ class AuthCog(commands.Cog):
             return
 
         if text in ["سجل", "/سجل", "نقاطي"]:
+            # السماح بأمر السجل والنقاط فقط في قناة الدخول أو قناة الخروج
+            if channel_id not in [self.LOGIN_CHANNEL_ID, self.LOGOUT_CHANNEL_ID]:
+                try:
+                    await message.delete()
+                except:
+                    pass
+                return
+
             stats = get_user_stats(guild_id, user_id)
             current_pts = get_user_data(guild_id, user_id)
             embed = discord.Embed(
