@@ -59,7 +59,7 @@ async def on_member_join(member):
             )
             await channel.send(content=f"حياك الله {member.mention} 🚀", embed=embed)
 
-# 2. نظام تسجيل المغادرة التلقائي عند الخروج من السيرفر
+# 2. نظام تسجيل المغادرة التلقائي عند الخروج الفعلي من السيرفر
 @bot.event
 async def on_member_remove(member):
     guild_id = str(member.guild.id)
@@ -137,86 +137,105 @@ async def on_message(message):
     guild_id = str(message.guild.id)
     user_id = str(message.author.id)
 
-    # أ. أوامر الدخول والخروج اليدوي والسجل (مقيدة بقناة السجلات المحددة حصراً)
-    if text in ["دخول", "خروج", "سجل"]:
+    # أ. أمر الدخول
+    if text == "دخول":
         config = load_data(CONFIG_FILE)
         records_channel_id = config.get(guild_id, {}).get("records_channel")
         
         if records_channel_id and message.channel.id != records_channel_id:
             await message.delete()
-            warn = await message.channel.send(f"❌ عذراً {message.author.mention}, هذه الأوامر مخصصة فقط في قناة السجلات!")
+            warn = await message.channel.send(f"❌ عذراً {message.author.mention}, هذا الأمر مخصص فقط في قناة السجلات!")
             await asyncio.sleep(4)
             await warn.delete()
             return
 
-        if text == "دخول":
-            today_date = datetime.now().strftime("%Y-%m-%d")
-            stats = load_data(DATA_FILE)
-            
-            if guild_id not in stats: stats[guild_id] = {}
-            if user_id not in stats[guild_id]: 
-                stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0, "last_checkin": "", "checkins_count": 0, "last_leave": "", "manual_leaves_count": 0}
-            
-            if "checkins_count" not in stats[guild_id][user_id]:
-                stats[guild_id][user_id]["checkins_count"] = 0
-            if "manual_leaves_count" not in stats[guild_id][user_id]:
-                stats[guild_id][user_id]["manual_leaves_count"] = 0
+        today_date = datetime.now().strftime("%Y-%m-%d")
+        stats = load_data(DATA_FILE)
+        
+        if guild_id not in stats: stats[guild_id] = {}
+        if user_id not in stats[guild_id]: 
+            stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0, "last_checkin": "", "checkins_count": 0, "last_leave": "", "manual_leaves_count": 0}
+        
+        if "checkins_count" not in stats[guild_id][user_id]:
+            stats[guild_id][user_id]["checkins_count"] = 0
 
-            if stats[guild_id][user_id].get("last_checkin") == today_date:
-                await message.channel.send(f"⚠️ يا {message.author.mention}، أنت سجلت دخولك اليوم بالفعل!")
-            else:
-                stats[guild_id][user_id]["last_checkin"] = today_date
-                stats[guild_id][user_id]["checkins_count"] += 1
-                save_data(stats, DATA_FILE)
-                
-                count = stats[guild_id][user_id]["checkins_count"]
-                await message.channel.send(f"📥 **تم تسجيل الدخول اليومي**\nأهلاً بك يا {message.author.mention}! تم تسجيل حضورك اليوم بنجاح.\nإجمالي مرات الدخول: **{count}**")
+        if stats[guild_id][user_id].get("last_checkin") == today_date:
+            await message.channel.send(f"⚠️ يا {message.author.mention}، أنت سجلت دخولك اليوم بالفعل!")
+        else:
+            stats[guild_id][user_id]["last_checkin"] = today_date
+            stats[guild_id][user_id]["checkins_count"] += 1
+            save_data(stats, DATA_FILE)
+            
+            count = stats[guild_id][user_id]["checkins_count"]
+            await message.channel.send(f"📥 **تم تسجيل الدخول اليومي**\nأهلاً بك يا {message.author.mention}! تم تسجيل حضورك اليوم بنجاح.\nإجمالي مرات الدخول: **{count}**")
 
-        elif text == "خروج":
-            today_date = datetime.now().strftime("%Y-%m-%d")
-            stats = load_data(DATA_FILE)
-            
-            if guild_id not in stats: stats[guild_id] = {}
-            if user_id not in stats[guild_id]: 
-                stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0, "last_checkin": "", "checkins_count": 0, "last_leave": "", "manual_leaves_count": 0}
-            
-            if "manual_leaves_count" not in stats[guild_id][user_id]:
-                stats[guild_id][user_id]["manual_leaves_count"] = 0
+    # ب. أمر الخروج اليدوي (تم فصله وتعديله ليضمن الاستجابة السريعة)
+    elif text == "خروج":
+        config = load_data(CONFIG_FILE)
+        records_channel_id = config.get(guild_id, {}).get("records_channel")
+        
+        if records_channel_id and message.channel.id != records_channel_id:
+            await message.delete()
+            warn = await message.channel.send(f"❌ عذراً {message.author.mention}, هذا الأمر مخصص فقط في قناة السجلات!")
+            await asyncio.sleep(4)
+            await warn.delete()
+            return
 
-            if stats[guild_id][user_id].get("last_leave") == today_date:
-                await message.channel.send(f"⚠️ يا {message.author.mention}، أنت سجلت خروجك اليوم بالفعل!")
-            else:
-                stats[guild_id][user_id]["last_leave"] = today_date
-                stats[guild_id][user_id]["manual_leaves_count"] += 1
-                save_data(stats, DATA_FILE)
-                
-                leave_count = stats[guild_id][user_id]["manual_leaves_count"]
-                await message.channel.send(f"📤 **تم تسجيل الخروج اليومي**\nمع السلامة يا {message.author.mention}! تم تسجيل خروجك اليوم بنجاح.\nإجمالي مرات الخروج: **{leave_count}**")
+        today_date = datetime.now().strftime("%Y-%m-%d")
+        stats = load_data(DATA_FILE)
+        
+        if guild_id not in stats: stats[guild_id] = {}
+        if user_id not in stats[guild_id]: 
+            stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0, "last_checkin": "", "checkins_count": 0, "last_leave": "", "manual_leaves_count": 0}
+        
+        if "manual_leaves_count" not in stats[guild_id][user_id]:
+            stats[guild_id][user_id]["manual_leaves_count"] = 0
 
-        elif text == "سجل":
-            stats = load_data(DATA_FILE)
-            user_data = stats.get(guild_id, {}).get(user_id, {"joins": 0, "leaves": 0, "points": 0, "checkins_count": 0, "manual_leaves_count": 0})
+        if stats[guild_id][user_id].get("last_leave") == today_date:
+            await message.channel.send(f"⚠️ يا {message.author.mention}، أنت سجلت خروجك اليوم بالفعل!")
+        else:
+            stats[guild_id][user_id]["last_leave"] = today_date
+            stats[guild_id][user_id]["manual_leaves_count"] += 1
+            save_data(stats, DATA_FILE)
             
-            checkins = user_data.get('checkins_count', 0)
-            manual_leaves = user_data.get('manual_leaves_count', 0)
-            
-            embed = discord.Embed(
-                title=f"📊 سجل دخولك وخروجك يا {message.author.display_name}",
-                color=discord.Color.green()
-            )
-            embed.set_thumbnail(url=message.author.display_avatar.url)
-            embed.add_field(name="📥 مرات الدخول", value=f"**{checkins}**", inline=False)
-            embed.add_field(name="📤 مرات الخروج", value=f"**{manual_leaves}**", inline=False)
-            
-            await message.channel.send(embed=embed)
+            leave_count = stats[guild_id][user_id]["manual_leaves_count"]
+            await message.channel.send(f"📤 **تم تسجيل الخروج اليومي**\nمع السلامة يا {message.author.mention}! تم تسجيل خروجك اليوم بنجاح.\nإجمالي مرات الخروج: **{leave_count}**")
 
-    # ب. فحص النقاط
+    # ج. أمر السجل
+    elif text == "سجل":
+        config = load_data(CONFIG_FILE)
+        records_channel_id = config.get(guild_id, {}).get("records_channel")
+        
+        if records_channel_id and message.channel.id != records_channel_id:
+            await message.delete()
+            warn = await message.channel.send(f"❌ عذراً {message.author.mention}, هذا الأمر مخصص فقط في قناة السجلات!")
+            await asyncio.sleep(4)
+            await warn.delete()
+            return
+
+        stats = load_data(DATA_FILE)
+        user_data = stats.get(guild_id, {}).get(user_id, {"joins": 0, "leaves": 0, "points": 0, "checkins_count": 0, "manual_leaves_count": 0})
+        
+        checkins = user_data.get('checkins_count', 0)
+        manual_leaves = user_data.get('manual_leaves_count', 0)
+        
+        embed = discord.Embed(
+            title=f"📊 سجل دخولك وخروجك يا {message.author.display_name}",
+            color=discord.Color.green()
+        )
+        embed.set_thumbnail(url=message.author.display_avatar.url)
+        embed.add_field(name="📥 مرات الدخول", value=f"**{checkins}**", inline=False)
+        embed.add_field(name="📤 مرات الخروج", value=f"**{manual_leaves}**", inline=False)
+        
+        await message.channel.send(embed=embed)
+
+    # د. فحص النقاط
     elif text == "نقاطي":
         stats = load_data(DATA_FILE)
         points = stats.get(guild_id, {}).get(user_id, {}).get("points", 0)
         await message.channel.send(f"💰 رصيدك الحالي يا {message.author.mention}: **{points}** نقطة.")
 
-    # ج. ألعاب التحدي والحساب
+    # هـ. ألعاب التحدي والحساب
     elif text in ["تحدي", "حساب"]:
         config = load_data(CONFIG_FILE)
         games_channel_id = config.get(guild_id, {}).get("games_channel")
