@@ -148,8 +148,59 @@ async def on_message(message):
             embed.add_field(name="📤 مرات الخروج", value=f"**{leaves}**", inline=True)
 
             await message.channel.send(embed=embed)
+        # التقاط أزرار أو كلمات الدخول والخروج
+        if text in ["تسجيل دخول", "دخول"]:
+            await check_daily_register(message, "join")
+            return
+
+        if text in ["تسجيل خروج", "خروج"]:
+            await check_daily_register(message, "leave")
+            return
 
     await bot.process_commands(message)
+# أوامر تسجيل الدخول والخروج اليومية
+from datetime import datetime
+
+async def check_daily_register(message, action_type):
+    guild_id = str(message.guild.id)
+    user_id = str(message.author.id)
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    stats = load_data(DATA_FILE)
+    if guild_id not in stats:
+        stats[guild_id] = {}
+    if user_id not in stats[guild_id]:
+        stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "last_join": "", "last_leave": ""}
+
+    user_data = stats[guild_id][user_id]
+
+    if action_type == "join":
+        if user_data.get("last_join") == today_str:
+            await message.channel.send(f"⚠️ يا {message.author.mention}، أنت سجلت دخولك اليوم بالفعل!")
+            return
+        user_data["joins"] += 1
+        user_data["last_join"] = today_str
+        save_data(stats, DATA_FILE)
+        embed = discord.Embed(
+            title="📥 تم تسجيل الدخول اليومي",
+            description=f"أهلاً بك يا {message.author.mention}! تم تسجيل حضورك اليوم بنجاح.\nإجمالي مرات الدخول: **{user_data['joins']}**",
+            color=discord.Color.green()
+        )
+        await message.channel.send(embed=embed)
+
+    elif action_type == "leave":
+        if user_data.get("last_leave") == today_str:
+            await message.channel.send(f"⚠️ يا {message.author.mention}، أنت سجلت خروجك اليوم بالفعل!")
+            return
+        user_data["leaves"] += 1
+        user_data["last_leave"] = today_str
+        save_data(stats, DATA_FILE)
+        embed = discord.Embed(
+            title="📤 تم تسجيل الخروج اليومي",
+            description=f"مع السلامة يا {message.author.mention}! تم تسجيل خروجك اليوم بنجاح.\nإجمالي مرات الخروج: **{user_data['leaves']}**",
+            color=discord.Color.red()
+        )
+        await message.channel.send(embed=embed)
 
 # تشغيل البوت باستخدام التوكن من الـ Environment Variable
 token = os.getenv("DISCORD_TOKEN")
