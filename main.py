@@ -3,6 +3,7 @@ import json
 import asyncio
 import discord
 from discord.ext import commands
+from datetime import datetime
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -30,7 +31,7 @@ def save_data(data, file_path):
 async def on_ready():
     print(f"البوت جاهز وشغال باسم: {bot.user}")
 
-# 1. نظام تسجيل الدخول (الترحيب الفخم + عداد الدخول)
+# 1. نظام الترحيب عند دخول السيرفر (Embed فخم)
 @bot.event
 async def on_member_join(member):
     guild_id = str(member.guild.id)
@@ -39,14 +40,14 @@ async def on_member_join(member):
     stats = load_data(DATA_FILE)
     if guild_id not in stats: stats[guild_id] = {}
     if user_id not in stats[guild_id]: 
-        stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0}
+        stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0, "last_checkin": ""}
         
     stats[guild_id][user_id]["joins"] += 1
     save_data(stats, DATA_FILE)
 
     config = load_data(CONFIG_FILE)
-    if guild_id in config and "allowed_channel" in config[guild_id]:
-        channel_id = config[guild_id]["allowed_channel"]
+    if guild_id in config and "welcome_channel" in config[guild_id]:
+        channel_id = config[guild_id]["welcome_channel"]
         channel = member.guild.get_channel(channel_id)
         if channel:
             embed = discord.Embed(
@@ -58,7 +59,7 @@ async def on_member_join(member):
             )
             await channel.send(content=f"حياك الله {member.mention} 🚀", embed=embed)
 
-# 2. نظام تسجيل الخروج (عداد الخروج + رسالة المغادرة)
+# 2. نظام تسجيل المغادرة عند الخروج من السيرفر
 @bot.event
 async def on_member_remove(member):
     guild_id = str(member.guild.id)
@@ -67,14 +68,14 @@ async def on_member_remove(member):
     stats = load_data(DATA_FILE)
     if guild_id not in stats: stats[guild_id] = {}
     if user_id not in stats[guild_id]: 
-        stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0}
+        stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0, "last_checkin": ""}
         
     stats[guild_id][user_id]["leaves"] += 1
     save_data(stats, DATA_FILE)
 
     config = load_data(CONFIG_FILE)
-    if guild_id in config and "allowed_channel" in config[guild_id]:
-        channel_id = config[guild_id]["allowed_channel"]
+    if guild_id in config and "leave_channel" in config[guild_id]:
+        channel_id = config[guild_id]["leave_channel"]
         channel = member.guild.get_channel(channel_id)
         if channel:
             embed = discord.Embed(
@@ -85,16 +86,26 @@ async def on_member_remove(member):
             )
             await channel.send(embed=embed)
 
-# 3. أوامر الإدارة الوحيدة التي تحتاج رمز (!) لضبط الإعدادات
+# 3. أوامر الإدارة لتحديد القنوات (تكتب برمز !)
 @bot.command(name="تحديد_الترحيب")
 @commands.has_permissions(administrator=True)
 async def set_welcome(ctx):
     config = load_data(CONFIG_FILE)
     guild_id = str(ctx.guild.id)
     if guild_id not in config: config[guild_id] = {}
-    config[guild_id]["allowed_channel"] = ctx.channel.id
+    config[guild_id]["welcome_channel"] = ctx.channel.id
     save_data(config, CONFIG_FILE)
-    await ctx.send("✅ تم تعيين هذه القناة للترحيب والسجلات بنجاح!")
+    await ctx.send("✅ تم تعيين هذه القناة **للترحيب** بنجاح!")
+
+@bot.command(name="تحديد_الخروج")
+@commands.has_permissions(administrator=True)
+async def set_leave(ctx):
+    config = load_data(CONFIG_FILE)
+    guild_id = str(ctx.guild.id)
+    if guild_id not in config: config[guild_id] = {}
+    config[guild_id]["leave_channel"] = ctx.channel.id
+    save_data(config, CONFIG_FILE)
+    await ctx.send("✅ تم تعيين هذه القناة **للخروج** بنجاح!")
 
 @bot.command(name="تحديد_الألعاب")
 @commands.has_permissions(administrator=True)
@@ -104,9 +115,9 @@ async def set_games(ctx):
     if guild_id not in config: config[guild_id] = {}
     config[guild_id]["games_channel"] = ctx.channel.id
     save_data(config, CONFIG_FILE)
-    await ctx.send("✅ تم تعيين هذه القناة للألعاب بنجاح!")
+    await ctx.send("✅ تم تعيين هذه القناة **للألعاب** بنجاح!")
 
-# 4. نظام الأوامر والألعاب بالكامل (بدون أي رموز)
+# 4. الأوامر التفاعلية الكاملة (بدون أي رموز)
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -116,29 +127,51 @@ async def on_message(message):
     guild_id = str(message.guild.id)
     user_id = str(message.author.id)
 
-    # فحص النقاط بدون رموز
-    if text == "نقاطي":
+    # أ. أمر تسجيل الحضور اليومي (دخول) زي الصورة بالضبط
+    if text == "دخول":
+        today_date = datetime.now().strftime("%Y-%m-%d")
+        stats = load_data(DATA_FILE)
+        
+        if guild_id not in stats: stats[guild_id] = {}
+        if user_id not in stats[guild_id]: 
+            stats[guild_id][user_id] = {"joins": 0, "leaves": 0, "points": 0, "last_checkin": "", "checkins_count": 0}
+        
+        if "checkins_count" not in stats[guild_id][user_id]:
+            stats[guild_id][user_id]["checkins_count"] = 0
+
+        # التحقق إذا سجل حضور اليوم من قبل
+        if stats[guild_id][user_id].get("last_checkin") == today_date:
+            await message.channel.send(f"⚠️ يا {message.author.mention}، أنت سجلت دخولك اليوم بالفعل!")
+        else:
+            stats[guild_id][user_id]["last_checkin"] = today_date
+            stats[guild_id][user_id]["checkins_count"] += 1
+            save_data(stats, DATA_FILE)
+            
+            count = stats[guild_id][user_id]["checkins_count"]
+            await message.channel.send(f"📥 **تم تسجيل الدخول اليومي**\nأهلاً بك يا {message.author.mention}! تم تسجيل حضورك اليوم بنجاح.\nإجمالي مرات الدخول: **{count}**")
+
+    # ب. أمر السجل (يعرض إحصائيات العضو زي الصورة)
+    elif text == "سجل":
+        stats = load_data(DATA_FILE)
+        user_data = stats.get(guild_id, {}).get(user_id, {"joins": 0, "leaves": 0, "points": 0, "checkins_count": 0})
+        
+        embed = discord.Embed(
+            title=f"📊 سجل دخولك وخروجوك يا {message.author.display_name}",
+            color=discord.Color.green()
+        )
+        embed.set_thumbnail(url=message.author.display_avatar.url)
+        embed.add_field(name="📥 مرات الدخول", value=f"**{user_data.get('checkins_count', user_data.get('joins', 0))}**", inline=False)
+        embed.add_field(name="📤 مرات الخروج", value=f"**{user_data.get('leaves', 0)}**", inline=False)
+        
+        await message.channel.send(embed=embed)
+
+    # ج. فحص النقاط
+    elif text == "نقاطي":
         stats = load_data(DATA_FILE)
         points = stats.get(guild_id, {}).get(user_id, {}).get("points", 0)
         await message.channel.send(f"💰 رصيدك الحالي يا {message.author.mention}: **{points}** نقطة.")
 
-    # أمر السجل بدون رموز (يكتب العضو: سجل)
-    elif text == "سجل":
-        stats = load_data(DATA_FILE)
-        user_data = stats.get(guild_id, {}).get(user_id, {"joins": 0, "leaves": 0, "points": 0})
-        
-        embed = discord.Embed(
-            title=f"📊 | سجل العضو: {message.author.display_name}",
-            color=discord.Color.blue()
-        )
-        embed.set_thumbnail(url=message.author.display_avatar.url)
-        embed.add_field(name="📥 مرات دخول السيرفر", value=f"**{user_data.get('joins', 0)}** مرة", inline=True)
-        embed.add_field(name="📤 مرات مغادرة السيرفر", value=f"**{user_data.get('leaves', 0)}** مرة", inline=True)
-        embed.add_field(name="💰 رصيد النقاط", value=f"**{user_data.get('points', 0)}** نقطة", inline=False)
-        
-        await message.channel.send(embed=embed)
-
-    # ألعاب التحدي والحساب (بدون رموز)
+    # د. ألعاب التحدي والحساب
     elif text in ["تحدي", "حساب"]:
         config = load_data(CONFIG_FILE)
         games_channel_id = config.get(guild_id, {}).get("games_channel")
