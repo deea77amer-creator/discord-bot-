@@ -4,6 +4,24 @@ import asyncio
 import discord
 from discord.ext import commands
 from datetime import datetime
+from flask import Flask
+from threading import Thread
+
+# --- إعداد سيرفر الـ Flask الوهمي لمنع مشكلة Port Timeout على Render ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "I am alive!"
+
+def run():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+# -----------------------------------------------------------------
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -169,7 +187,7 @@ async def on_message(message):
             count = stats[guild_id][user_id]["checkins_count"]
             await message.channel.send(f"📥 **تم تسجيل الدخول اليومي**\nأهلاً بك يا {message.author.mention}! تم تسجيل حضورك اليوم بنجاح.\nإجمالي مرات الدخول: **{count}**")
 
-    # ب. أمر الخروج اليدوي (تم فصله وتعديله ليضمن الاستجابة السريعة)
+    # ب. أمر الخروج اليدوي
     elif text == "خروج":
         config = load_data(CONFIG_FILE)
         records_channel_id = config.get(guild_id, {}).get("records_channel")
@@ -298,8 +316,12 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-token = os.getenv("DISCORD_TOKEN")
-if token:
-    bot.run(token)
-else:
-    print("خطأ: التوكن غير موجود!")
+if __name__ == "__main__":
+    # تشغيل سيرفر الـ Flask في الخلفية قبل تشغيل البوت
+    keep_alive()
+    
+    token = os.getenv("DISCORD_TOKEN")
+    if token:
+        bot.run(token)
+    else:
+        print("خطأ: التوكن غير موجود!")
