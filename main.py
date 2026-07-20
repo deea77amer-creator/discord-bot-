@@ -219,8 +219,8 @@ async def on_message(message):
             leave_count = stats[guild_id][user_id]["manual_leaves_count"]
             await message.channel.send(f"📤 **تم تسجيل الخروج اليومي**\nمع السلامة يا {message.author.mention}! تم تسجيل خروجك اليوم بنجاح.\nإجمالي مرات الخروج: **{leave_count}**")
 
-    # ج. أمر السجل
-    elif text == "سجل":
+    # ج. أمر السجل (مع دعم المنشن)
+    elif text.startswith("سجل"):
         config = load_data(CONFIG_FILE)
         records_channel_id = config.get(guild_id, {}).get("records_channel")
         
@@ -231,17 +231,20 @@ async def on_message(message):
             await warn.delete()
             return
 
+        target_user = message.mentions[0] if message.mentions else message.author
+        target_id = str(target_user.id)
+
         stats = load_data(DATA_FILE)
-        user_data = stats.get(guild_id, {}).get(user_id, {"joins": 0, "leaves": 0, "points": 0, "checkins_count": 0, "manual_leaves_count": 0})
+        user_data = stats.get(guild_id, {}).get(target_id, {"joins": 0, "leaves": 0, "points": 0, "checkins_count": 0, "manual_leaves_count": 0})
         
         checkins = user_data.get('checkins_count', 0)
         manual_leaves = user_data.get('manual_leaves_count', 0)
         
         embed = discord.Embed(
-            title=f"📊 سجل دخولك وخروجك يا {message.author.display_name}",
+            title=f"📊 سجل دخول وخروج العضو {target_user.display_name}",
             color=discord.Color.green()
         )
-        embed.set_thumbnail(url=message.author.display_avatar.url)
+        embed.set_thumbnail(url=target_user.display_avatar.url)
         embed.add_field(name="📥 مرات الدخول", value=f"**{checkins}**", inline=False)
         embed.add_field(name="📤 مرات الخروج", value=f"**{manual_leaves}**", inline=False)
         
@@ -317,7 +320,6 @@ async def on_message(message):
     await bot.process_commands(message)
 
 if __name__ == "__main__":
-    # تشغيل سيرفر الـ Flask في الخلفية قبل تشغيل البوت
     keep_alive()
     
     token = os.getenv("DISCORD_TOKEN")
