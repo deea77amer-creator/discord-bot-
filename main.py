@@ -72,7 +72,30 @@ async def on_member_join(member):
 
             await channel.send(content=f"حياك الله {member.mention} 🚀🎉", embed=embed)
 
-# 2. نظام الأوامر والألعاب بدون بريفكس (تكتب الكلمة مباشرة في الشات)
+# 2. أوامر الإدارة لتحديد قنوات الترحيب والألعاب
+@bot.command(name="تحديد_الترحيب")
+@commands.has_permissions(administrator=True)
+async def set_welcome_channel(ctx):
+    config = load_data(CONFIG_FILE)
+    guild_id = str(ctx.guild.id)
+    if guild_id not in config:
+        config[guild_id] = {}
+    config[guild_id]["allowed_channel"] = ctx.channel.id
+    save_data(config, CONFIG_FILE)
+    await ctx.send(f"✅ تم تحديد هذه القناة **للترحيب** بنجاح يا {ctx.author.mention}!")
+
+@bot.command(name="تحديد_الألعاب")
+@commands.has_permissions(administrator=True)
+async def set_games_channel(ctx):
+    config = load_data(CONFIG_FILE)
+    guild_id = str(ctx.guild.id)
+    if guild_id not in config:
+        config[guild_id] = {}
+    config[guild_id]["games_channel"] = ctx.channel.id
+    save_data(config, CONFIG_FILE)
+    await ctx.send(f"✅ تم تحديد هذه القناة **للألعاب** بنجاح يا {ctx.author.mention}!")
+
+# 3. نظام الأوامر والألعاب بدون بريفكس (مع تقييد الألعاب بقناة الألعاب المحددة)
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -82,77 +105,88 @@ async def on_message(message):
     guild_id = str(message.guild.id)
     user_id = str(message.author.id)
 
-    # أمر فحص النقاط
+    # التحقق مما إذا كانت القناة مخصصة للألعاب (إذا تم تحديدها مسبقاً)
+    config = load_data(CONFIG_FILE)
+    games_channel_id = config.get(guild_id, {}).get("games_channel")
+
+    # أمر فحص النقاط (متاح في أي قناة أو تبي تخصصه براحتك)
     if text == "نقاطي":
         stats = load_data(DATA_FILE)
         points = stats.get(guild_id, {}).get(user_id, {}).get("points", 0)
         await message.channel.send(f"💰 رصيدك الحالي يا {message.author.mention} هو: **{points}** نقطة!")
 
-    # لعبة تحدي الكلمات السريعة
-    elif text == "تحدي":
-        import random
-        words = ["ديسكورد", "برمجة", "بايثون", "سيرفر", "تحدي", "سرعة"]
-        target_word = random.choice(words)
-        
-        await message.channel.send(f"🎮 **لعبة السرعة!** أسرع شخص يكتب الكلمة التالية يربح 50 نقطة:\n`{target_word}`")
+    # ألعاب التحدي والحساب (تشتغل حصرياً في قناة الألعاب المحددة، وإذا ما حدد قناة تشتغل بكل الرومات كحماية)
+    elif text in ["تحدي", "حساب"]:
+        if games_channel_id and message.channel.id != games_channel_id:
+            await message.delete() # حذف رسالة الخطأ عشان ما تخرب الشات
+            warning = await message.channel.send(f"❌ عذراً {message.author.mention}, ألعاب البوت مخصصة فقط في قناة الألعاب المحددة!")
+            await asyncio.sleep(5)
+            await warning.delete()
+            return
 
-        def check(m):
-            return m.content == target_word and m.channel == message.channel and not m.author.bot
-
-        try:
-            msg = await bot.wait_for('message', timeout=15.0, check=check)
-        except asyncio.TimeoutError:
-            await message.channel.send("⏰ انتهى الوقت! محد كتب الكلمة في الوقت المناسب.")
-        else:
-            g_id = str(msg.guild.id)
-            u_id = str(msg.author.id)
+        if text == "تحدي":
+            import random
+            words = ["ديسكورد", "برمجة", "بايثون", "سيرفر", "تحدي", "سرعة"]
+            target_word = random.choice(words)
             
-            stats = load_data(DATA_FILE)
-            if g_id not in stats:
-                stats[g_id] = {}
-            if u_id not in stats[g_id]:
-                stats[g_id][u_id] = {"joins": 0, "leaves": 0, "points": 0}
-            if "points" not in stats[g_id][u_id]:
-                stats[g_id][u_id]["points"] = 0
+            await message.channel.send(f"🎮 **لعبة السرعة!** أسرع شخص يكتب الكلمة التالية يربح 50 نقطة:\n`{target_word}`")
+
+            def check(m):
+                return m.content == target_word and m.channel == message.channel and not m.author.bot
+
+            try:
+                msg = await bot.wait_for('message', timeout=15.0, check=check)
+            except asyncio.TimeoutError:
+                await message.channel.send("⏰ انتهى الوقت! محد كتب الكلمة في الوقت المناسب.")
+            else:
+                g_id = str(msg.guild.id)
+                u_id = str(msg.author.id)
                 
-            stats[g_id][u_id]["points"] += 50
-            save_data(stats, DATA_FILE)
-            
-            await message.channel.send(f"🏆 مبروك يا {msg.author.mention}! فزت بالتحدي وربحت **50 نقطة**!")
-
-    # لعبة الحساب السريع
-    elif text == "حساب":
-        import random
-        num1 = random.randint(1, 20)
-        num2 = random.randint(1, 20)
-        operator = random.choice(["+", "-"])
-        answer = num1 + num2 if operator == "+" else num1 - num2
-            
-        await message.channel.send(f"🧮 **لعبة الحساب السريع!** أسرع شخص يكتب الناتج الصحيح:\nكم الناتج؟ `{num1} {operator} {num2} = ?` (معك 15 ثانية وربحك 30 نقطة)")
-
-        def check(m):
-            return m.content.isdigit() and int(m.content) == answer and m.channel == message.channel and not m.author.bot
-
-        try:
-            msg = await bot.wait_for('message', timeout=15.0, check=check)
-        except asyncio.TimeoutError:
-            await message.channel.send(f"⏰ انتهى الوقت! الإجابة الصحيحة كانت: **{answer}**")
-        else:
-            g_id = str(msg.guild.id)
-            u_id = str(msg.author.id)
-            
-            stats = load_data(DATA_FILE)
-            if g_id not in stats:
-                stats[g_id] = {}
-            if u_id not in stats[g_id]:
-                stats[g_id][u_id] = {"joins": 0, "leaves": 0, "points": 0}
-            if "points" not in stats[g_id][u_id]:
-                stats[g_id][u_id]["points"] = 0
+                stats = load_data(DATA_FILE)
+                if g_id not in stats:
+                    stats[g_id] = {}
+                if u_id not in stats[g_id]:
+                    stats[g_id][u_id] = {"joins": 0, "leaves": 0, "points": 0}
+                if "points" not in stats[g_id][u_id]:
+                    stats[g_id][u_id]["points"] = 0
+                    
+                stats[g_id][u_id]["points"] += 50
+                save_data(stats, DATA_FILE)
                 
-            stats[g_id][u_id]["points"] += 30
-            save_data(stats, DATA_FILE)
-            
-            await message.channel.send(f"🏆 بطل الرياضيات يا {msg.author.mention}! وربح **30 نقطة**!")
+                await message.channel.send(f"🏆 مبروك يا {msg.author.mention}! فزت بالتحدي وربحت **50 نقطة**!")
+
+        elif text == "حساب":
+            import random
+            num1 = random.randint(1, 20)
+            num2 = random.randint(1, 20)
+            operator = random.choice(["+", "-"])
+            answer = num1 + num2 if operator == "+" else num1 - num2
+                
+            await message.channel.send(f"🧮 **لعبة الحساب السريع!** أسرع شخص يكتب الناتج الصحيح:\nكم الناتج؟ `{num1} {operator} {num2} = ?` (معك 15 ثانية وربحك 30 نقطة)")
+
+            def check(m):
+                return m.content.isdigit() and int(m.content) == answer and m.channel == message.channel and not m.author.bot
+
+            try:
+                msg = await bot.wait_for('message', timeout=15.0, check=check)
+            except asyncio.TimeoutError:
+                await message.channel.send(f"⏰ انتهى الوقت! الإجابة الصحيحة كانت: **{answer}**")
+            else:
+                g_id = str(msg.guild.id)
+                u_id = str(msg.author.id)
+                
+                stats = load_data(DATA_FILE)
+                if g_id not in stats:
+                    stats[g_id] = {}
+                if u_id not in stats[g_id]:
+                    stats[g_id][u_id] = {"joins": 0, "leaves": 0, "points": 0}
+                if "points" not in stats[g_id][u_id]:
+                    stats[g_id][u_id]["points"] = 0
+                    
+                stats[g_id][u_id]["points"] += 30
+                save_data(stats, DATA_FILE)
+                
+                await message.channel.send(f"🏆 بطل الرياضيات يا {msg.author.mention}! وربح **30 نقطة**!")
 
     await bot.process_commands(message)
 
