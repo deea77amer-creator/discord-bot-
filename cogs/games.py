@@ -93,7 +93,6 @@ class GamesCog(commands.Cog):
 
         # أمر عرض قائمة الألعاب الفخمة
         if text in ["العاب", "ألعاب", "/العاب", "الالعاب"]:
-            if not self.can_play(guild_id, user_id, "games_list", message): return
             embed = discord.Embed(
                 title="✨ قَائِمَة أَعَالِي الأَلْعَابِ وَالتَّحَدِّيَاتِ ✨",
                 description="مرحباً بك في عالم الحماس! اختر لعبتك المفضلة عبر كتابة أحد الأوامر التالية في الشات:\n\n"
