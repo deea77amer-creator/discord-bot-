@@ -91,6 +91,45 @@ class GamesCog(commands.Cog):
         guild_id = message.guild.id
         user_id = message.author.id
 
+        # أمر عرض قائمة الألعاب الفخمة
+        if text in ["العاب", "ألعاب", "/العاب", "الالعاب"]:
+            if not self.can_play(guild_id, user_id, "games_list", message): return
+            embed = discord.Embed(
+                title="✨ قَائِمَة أَعَالِي الأَلْعَابِ وَالتَّحَدِّيَاتِ ✨",
+                description="مرحباً بك في عالم الحماس! اختر لعبتك المفضلة عبر كتابة أحد الأوامر التالية في الشات:\n\n"
+                            "🎡 `عجلة` - عجلة الحظ الكبرى\n"
+                            "🎲 `نرد` - تحدي النرد الحماسي\n"
+                            "📦 `صناديق` - فتح الصناديق السرية\n"
+                            "✂️ `مقص` - حجر ورقة مقص\n"
+                            "🔢 `تخمين` - تحدي تخمين الأرقام\n"
+                            "🔮 `حظك` - اكتشف حظك اليومي\n"
+                            "⚡ `تحدي السرعة` - اختبار سرعة البديهة\n"
+                            "🧮 `حساب` - لعبة الحساب السريع\n"
+                            "💎 `كنز` - مغامرة الكنز المفقود\n"
+                            "⚽ `بلنتي` - ركلة جزاء حاسمة\n"
+                            "🏀 `سلة` - بطولة كرة السلة\n"
+                            "🎣 `صيد` - رحلة صيد السمك\n"
+                            "🏎️ `سيارات` - سباق السيارات المثير\n"
+                            "⛏️ `تعدين` - منجم الذهب والألماس\n"
+                            "⚔️ `مبارزة` - ساحة الشرف والمبارزة\n"
+                            "🎳 `بولينج` - بطولة البولينج الكبرى\n"
+                            "✈️ `طائرة` - معارك الطيران الحربي\n"
+                            "🚢 `سفينة` - رحلة عبور العواصف\n"
+                            "🏹 `سهم` - مهارة الرماية والسهام\n"
+                            "🚀 `فضاء` - رحلة غزو الفضاء\n"
+                            "🔐 `قبو` - فك ألغاز القبو السري\n"
+                            "🃏 `بوكر` - طاولة سحب الورق\n"
+                            "🏺 `فخار` - ورشة صناعة الفخار\n"
+                            "🧗‍♂️ `تسلق` - مغامرة تسلق القمم\n"
+                            "🧙‍♂️ `سحر` - إتقان التعويذات السحرية\n"
+                            "🌋 `بركان` - الهروب الأخير من الحمم\n\n"
+                            "💡 *ملاحظة: اكتب اسم اللعبة مباشرة في الشات لبدء اللعب!*",
+                color=discord.Color.from_rgb(212, 175, 55) # لون ذهبي فخم
+            )
+            embed.set_footer(text="🌟 استمتع بقضاء أوقات ممتعة واربح النقاط!", icon_url=message.author.display_avatar.url)
+            await message.channel.send(embed=embed)
+            return
+
         # 1. عجلة الحظ
         if text == "عجلة":
             if not self.can_play(guild_id, user_id, "wheel", message): return
@@ -208,7 +247,7 @@ class GamesCog(commands.Cog):
         # 23. فخار
         elif text == "فخار":
             if not self.can_play(guild_id, user_id, "pottery", message): return
-            await message.channel.send(embed=discord.Embed(title="🏺 صناعة الفخار", description=f>يا {message.author.mention}, شكل التحفة الفنية:", color=discord.Color.orange()), view=PotteryView(guild_id, user_id))
+            await message.channel.send(embed=discord.Embed(title="🏺 صناعة الفخار", description=f"يا {message.author.mention}, شكل التحفة الفنية:", color=discord.Color.orange()), view=PotteryView(guild_id, user_id))
 
         # 24. جبل
         elif text == "تسلق":
