@@ -64,7 +64,8 @@ def init_db():
             welcome_channel INTEGER,
             leave_channel INTEGER,
             games_channel INTEGER,
-            records_channel INTEGER
+            records_channel INTEGER,
+            top_channel INTEGER
         )
     ''')
     conn.commit()
@@ -108,7 +109,7 @@ def add_points(guild_id, user_id, amount):
 def get_config(guild_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT welcome_channel, leave_channel, games_channel, records_channel FROM config WHERE guild_id = ?", (str(guild_id),))
+    cursor.execute("SELECT welcome_channel, leave_channel, games_channel, records_channel, top_channel FROM config WHERE guild_id = ?", (str(guild_id),))
     row = cursor.fetchone()
     conn.close()
     if row:
@@ -116,7 +117,8 @@ def get_config(guild_id):
             "welcome_channel": row[0],
             "leave_channel": row[1],
             "games_channel": row[2],
-            "records_channel": row[3]
+            "records_channel": row[3],
+            "top_channel": row[4]
         }
     return {}
 
@@ -186,6 +188,12 @@ async def set_games(ctx):
 async def set_records(ctx):
     save_config_key(ctx.guild.id, "records_channel", ctx.channel.id)
     await ctx.send("✅ تم تعيين قناة **السجلات** بنجاح!")
+
+@bot.command(name="تحديد_التوب")
+@commands.has_permissions(administrator=True)
+async def set_top(ctx):
+    save_config_key(ctx.guild.id, "top_channel", ctx.channel.id)
+    await ctx.send("✅ تم تعيين قناة **التوب** بنجاح!")
 
 # --- نظام الكول داون (دقيقتان) ---
 COOLDOWN_TIME = timedelta(minutes=2)
@@ -726,13 +734,17 @@ async def on_message(message):
 
     # أمر التوب (أكثر الأعضاء نقاطاً)
     elif text_lower in ["توب", "!top", "top"]:
+        if config.get("top_channel") and message.channel.id != config["top_channel"]:
+            await message.delete()
+            return
+
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute("SELECT user_id, points FROM users WHERE guild_id = ? ORDER BY points DESC LIMIT 10", (guild_id,))
         top_users = cursor.fetchall()
         conn.close()
 
-        embed = discord.Embed(title="🏆 قائمة لوحة الشرف (Top 10)", description="أكثر الأعضاء جمعاً للننقاط في السيرفر:", color=discord.Color.gold())
+        embed = discord.Embed(title="🏆 قائمة لوحة الشرف (Top 10)", description="أكثر الأعضاء جمعاً للنقاط في السيرفر:", color=discord.Color.gold())
         
         if not top_users:
             embed.description = "لا توجد أي بيانات مسجلة حتى الآن."
