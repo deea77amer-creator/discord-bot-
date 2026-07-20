@@ -22,7 +22,7 @@ class AutoAzkar(commands.Cog):
     def cog_unload(self):
         self.send_azkar_loop.cancel()
 
-    @commands.command(name="تعيين_قناة_الأدعية")
+    @commands.command(name="تحديد_اذكار")        
     @commands.has_permissions(administrator=True)
     async def set_azkar_channel(self, ctx):
         self.azkar_channel_id = ctx.channel.id
