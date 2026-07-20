@@ -1,13 +1,13 @@
 import discord
 from discord.ext import commands
 
-class BotCommands(commands.Cog):
+class GeneralCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.author.bot:
+        if message.author.bot or not message.guild:
             return
 
         text = message.content.strip().lower()
@@ -19,7 +19,6 @@ class BotCommands(commands.Cog):
                 color=discord.Color.blue()
             )
             
-            # قسم الألعاب والتحديات
             embed.add_field(
                 name="🎲 ألعاب التحدي والنرد",
                 value="• `نرد @الشخص المبلغ` — لتحدي شخص في النرد برهان نقاط.\n"
@@ -28,7 +27,6 @@ class BotCommands(commands.Cog):
                 inline=False
             )
             
-            # قسم السوق والممتلكات
             embed.add_field(
                 name="🛒 السوق والممتلكات",
                 value="• `اسعار` — لعرض أسعار الأغراض المتغيرة.\n"
@@ -38,7 +36,6 @@ class BotCommands(commands.Cog):
                 inline=False
             )
 
-            # قسم التحويل والنقاط
             embed.add_field(
                 name="💸 التحويل والنقاط",
                 value="• `نقاطي` — لمعرفة رصيدك الحالي من النقاط.\n"
@@ -51,4 +48,4 @@ class BotCommands(commands.Cog):
             await message.channel.send(embed=embed)
 
 async def setup(bot):
-    await bot.add_cog(BotCommands(bot))
+    await bot.add_cog(GeneralCommands(bot))
