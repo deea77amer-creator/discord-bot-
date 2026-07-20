@@ -318,6 +318,7 @@ async def on_message(message):
                 await message.channel.send(f"🏆 بطل الرياضيات يا {msg.author.mention}! ربحت **30 نقطة**!")
 
     await bot.process_commands(message)
+
 # دالة تحميل الملفات الخارجية تلقائياً
 async def load_extensions():
     for filename in os.listdir("./"):
@@ -328,7 +329,6 @@ async def load_extensions():
             except Exception as e:
                 pass
 
-
 if __name__ == "__main__":
     keep_alive()
     
@@ -337,12 +337,6 @@ if __name__ == "__main__":
     except Exception:
         pass
     
-    token = os.getenv("DISCORD_TOKEN")
-    if token:
-        bot.run(token)
-    else:
-        print("خطأ: التوكن غير موجود!")
-   
     token = os.getenv("DISCORD_TOKEN")
     if token:
         bot.run(token)
