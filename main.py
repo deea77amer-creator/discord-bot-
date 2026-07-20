@@ -24,7 +24,6 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-# --- تم تعديل البوت ليصبح كلاس يدعم تحميل الملفات تلقائياً ---
 class MyBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
@@ -40,19 +39,18 @@ class MyBot(commands.Bot):
                         print(f"تم تحميل الملف بنجاح: {filename}")
                     except commands.errors.ExtensionAlreadyLoaded:
                         pass
-        # تم تصحيح الخطأ هنا بتحميل ملف games مباشرة لضمان عمل الأوامر
+        # تحميل ملف games مباشرة
         try:
             await self.load_extension('games')
             print("تم تحميل ملف games بنجاح")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"فشل تحميل ملف games: {e}")
 
     async def on_ready(self):
         print(f"البوت جاهز ومتصل بقاعدة البيانات المحلية باسم: {self.user}")
 
 bot = MyBot()
 
-# --- نظام قاعدة البيانات المحلية SQLite (حفظ دائم) ---
 DB_FILE = "database.db"
 
 def init_db():
@@ -137,7 +135,6 @@ def save_config_key(guild_id, key, value):
     conn.commit()
     conn.close()
 
-# --- نظام الترحيب والمغادرة (الأساسي) ---
 @bot.event
 async def on_member_join(member):
     guild_id = str(member.guild.id)
@@ -168,7 +165,6 @@ async def on_member_remove(member):
             embed = discord.Embed(title="👋 | طير غادرنا!", description=f"العضو **{member.name}** طلع.\n• إجمالي مرات خروجه: **{new_leaves}**", color=discord.Color.red())
             await channel.send(embed=embed)
 
-# --- أوامر تحديد القنوات ---
 @bot.command(name="تحديد_الترحيب")
 @commands.has_permissions(administrator=True)
 async def set_welcome(ctx):
@@ -199,10 +195,9 @@ async def set_top(ctx):
     save_config_key(ctx.guild.id, "top_channel", ctx.channel.id)
     await ctx.send("✅ تم تعيين قناة **التوب** بنجاح!")
 
-# --- معالجة الأوامر والرسائل الأساسية (نقاطي والتوب) ---
 @bot.event
 async def on_message(message):
-    if message.author.bot:
+    if message.author.bot or not message.guild:
         return
 
     text = message.content.strip()
@@ -211,12 +206,10 @@ async def on_message(message):
     user_id = str(message.author.id)
     config = get_config(guild_id)
 
-    # أمر نقاطي
     if text_lower == "نقاطي":
         data = get_user_data(guild_id, user_id)
         await message.channel.send(f"💰 رصيدك الحالي يا {message.author.mention}: **{data['points']}** نقطة.")
 
-    # أمر التوب (أكثر الأعضاء نقاطاً)
     elif text_lower in ["توب", "!top", "top"]:
         if config.get("top_channel") and message.channel.id != config["top_channel"]:
             await message.delete()
@@ -244,6 +237,7 @@ async def on_message(message):
 
         await message.channel.send(embed=embed)
 
+    # الأهم: هذا السطر هو الذي يجبر البوت على إرسال الرسائل لملفات الـ Cogs لتشغيل الألعاب
     await bot.process_commands(message)
 
 if __name__ == "__main__":
