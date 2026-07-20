@@ -568,7 +568,7 @@ class ClimbView(discord.ui.View):
 
 class MagicView(discord.ui.View):
     def __init__(self, g_id, u_id): super().__init__(timeout=60); self.g, self.u = g_id, u_id
-    @discord.ui.button(label="🧙‍♂️ تلويح بالعصا", style=discord.ButtonStyle.purple)
+    @discord.ui.button(label="🧙‍♂️ تلويح بالعصا", style=discord.ButtonStyle.secondary)
     async def mg(self, i, b):
         if str(i.user.id) != str(self.u): return await i.response.send_message("❌ ليس لك!", ephemeral=True)
         pts = random.choice([25, 75, 0])
