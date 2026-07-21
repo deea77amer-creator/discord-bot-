@@ -39,12 +39,25 @@ class MyBot(commands.Bot):
                         print(f"تم تحميل الملف بنجاح: {filename}")
                     except commands.errors.ExtensionAlreadyLoaded:
                         pass
-        # تحميل ملف games مباشرة
-        try:
-            await self.load_extension('games')
-            print("تم تحميل ملف games بنجاح")
-        except Exception as e:
-            print(f"فشل تحميل ملف games: {e}")
+
+        # تحميل الملفات من مجلد الألعاب bot/games تلقائياً (بدون حذف أي لعبة أو سوق)
+        games_paths = ['./bot/games', './games']
+        loaded_games = False
+        for path in games_paths:
+            if os.path.exists(path):
+                for filename in os.listdir(path):
+                    if filename.endswith('.py'):
+                        # استخراج المسار الصحيح للـ Cog (مثل bot.games.market أو games.market)
+                        prefix = path.replace('./', '').replace('/', '.')
+                        cog_name = f"{prefix}.{filename[:-3]}"
+                        try:
+                            await self.load_extension(cog_name)
+                            print(f"تم تحميل ملف الألعاب/السوق بنجاح: {filename}")
+                            loaded_games = True
+                        except Exception as e:
+                            print(f"فشل تحميل {filename}: {e}")
+                if loaded_games:
+                    break
 
     async def on_ready(self):
         print(f"البوت جاهز ومتصل بقاعدة البيانات السحابية MongoDB باسم: {self.user}")
@@ -178,7 +191,7 @@ async def set_top(ctx):
     save_config_key(ctx.guild.id, "top_channel", ctx.channel.id)
     await ctx.send("✅ تم تعيين قناة **التوب** بنجاح!")
 
-# --- أمر نقاطي (مرتبط بشكل دقيق برقم السيرفر والمستخدم) ---
+# --- أمر نقاطي ---
 @bot.command(name="نقاطي")
 async def my_points(ctx):
     if not ctx.guild:
@@ -188,46 +201,12 @@ async def my_points(ctx):
     data = get_user_data(guild_id, user_id)
     await ctx.send(f"💰 رصيدك الحالي يا {ctx.author.mention}: **{data.get('points', 0)}** نقطة.")
 
-# --- أمر التوب (مرتبط بسيرفرك الحالي حصرياً) ---
-@bot.command(name="top", aliases=["tوب", "التوب"])
-async def leaderboard(ctx):
-    if not ctx.guild:
-        return
-    guild_id = str(ctx.guild.id)
-    config = get_config(guild_id)
-
-    if config.get("top_channel") and ctx.channel.id != config["top_channel"]:
-        await ctx.message.delete()
-        return
-
-    if users_collection is not None:
-        top_users_cursor = users_collection.find({"guild_id": guild_id}).sort("points", -1).limit(10)
-        top_users = [(doc.get("user_id"), doc.get("points", 0)) for doc in top_users_cursor]
-    else:
-        top_users = []
-
-    embed = discord.Embed(title="🏆 قائمة لوحة الشرف (Top 10)", description="أكثر الأعضاء جمعاً للنقاط في السيرفر:", color=discord.Color.gold())
-    
-    if not top_users:
-        embed.description = "لا توجد أي بيانات مسجلة حتى الآن."
-    else:
-        description_lines = []
-        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-        for index, (u_id, pts) in enumerate(top_users):
-            member = ctx.guild.get_member(int(u_id))
-            name = member.display_name if member else f"مغادر ({u_id})"
-            medal = medals[index] if index < len(medals) else f"•"
-            description_lines.append(f"{medal} **{name}** — `{pts}` نقطة")
-        embed.description = "\n".join(description_lines)
-
-    await ctx.send(embed=embed)
-
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
         return
     
-    # معالجة بقية الأوامر والملفات الخارجية بدون تكرار
+    # معالجة الأوامر والملفات الخارجية
     await bot.process_commands(message)
 
 if __name__ == "__main__":
