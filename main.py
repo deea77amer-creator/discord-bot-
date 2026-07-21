@@ -210,9 +210,9 @@ async def on_message(message):
     await bot.process_commands(message)
 
 if __name__ == "__main__":
-    keep_alive()
     token = os.getenv("DISCORD_TOKEN")
     if token:
-        bot.run(token)
+        keep_alive()  # تشغيل سيرفر الـ Flask أولاً في الخلفية
+        bot.run(token) # تشغيل البوت
     else:
         print("خطأ: التوكن غير موجود!")
