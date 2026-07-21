@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 import os
 from pymongo import MongoClient
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- الاتصال بقاعدة البيانات السحابية MongoDB الموحدة ---
 MONGO_URL = os.getenv("MONGO_URL")
@@ -64,23 +64,36 @@ def get_user_status(guild_id, user_id):
     return None
 
 def update_user_status(guild_id, user_id, action):
+    now_str = datetime.now().isoformat()
     if user_status_collection is not None:
-        # تحديث آخر حركة للمستخدم في MongoDB
+        # تحديث آخر حركة ووقت حدوثها للمستخدم في MongoDB لمنع التكرار كل 24 ساعة
         user_status_collection.update_one(
             {"guild_id": str(guild_id), "user_id": str(user_id)},
-            {"$set": {"last_action": action}},
+            {"$set": {"last_action": action, "last_action_time": now_str}},
             upsert=True
         )
     
     if auth_logs_collection is not None:
         # تسجيل الحركة في السجلات السحابية
-        now_str = datetime.now().isoformat()
         auth_logs_collection.insert_one({
             "guild_id": str(guild_id),
             "user_id": str(user_id),
             "action": action,
             "timestamp": now_str
         })
+
+# دالة مسلّاعدة لجلب وقت آخر حركة قام بها المستخدم للتحقق من مرور 24 ساعة
+def get_user_last_action_time(guild_id, user_id):
+    if user_status_collection is None:
+        return None
+    query = {"guild_id": str(guild_id), "user_id": str(user_id)}
+    doc = user_status_collection.find_one(query)
+    if doc and "last_action_time" in doc:
+        try:
+            return datetime.fromisoformat(doc["last_action_time"])
+        except:
+            return None
+    return None
 
 def get_user_stats(guild_id, user_id):
     stats = {"دخول": 0, "خروج": 0}
@@ -129,6 +142,20 @@ class AuthCog(commands.Cog):
                     pass
                 return await message.channel.send(f"❌ يا {message.author.mention}, لقد قمت بتسجيل **الدخول** مسبقاً ولا يمكنك تكراره حتى تسجل الخروج!", delete_after=5)
 
+            # التحقق من مرور 24 ساعة منذ آخر حركة دخول/خروج لمنع السبام
+            last_time = get_user_last_action_time(guild_id, user_id)
+            if last_time:
+                time_diff = datetime.now() - last_time
+                if time_diff < timedelta(hours=24):
+                    remaining = timedelta(hours=24) - time_diff
+                    hours, remainder = divmod(int(remaining.total_seconds()), 3600)
+                    minutes, _ = divmod(remainder, 60)
+                    try:
+                        await message.delete()
+                    except:
+                        pass
+                    return await message.channel.send(f"⏳ يا {message.author.mention}, يجب عليك الانتظار لمدة **{hours} ساعة و {minutes} دقيقة** قبل إمكانية تسجيل الدخول مرة أخرى.", delete_after=5)
+
             update_user_status(guild_id, user_id, "دخول")
             new_pts = add_points(guild_id, user_id, 5) # مكافأة 5 نقاط عند تسجيل الدخول
             await message.channel.send(f"✅ يا {message.author.mention}, تم تسجيل **الدخول** بنجاح! (رصيد النقاط: {new_pts} نقطة).")
@@ -148,6 +175,20 @@ class AuthCog(commands.Cog):
                 except:
                     pass
                 return await message.channel.send(f"❌ يا {message.author.mention}, أنت لم تقم بتسجيل الدخول أساساً لتسجل الخروج!", delete_after=5)
+
+            # التحقق من مرور 24 ساعة منذ آخر حركة دخول/خروج لمنع السبام
+            last_time = get_user_last_action_time(guild_id, user_id)
+            if last_time:
+                time_diff = datetime.now() - last_time
+                if time_diff < timedelta(hours=24):
+                    remaining = timedelta(hours=24) - time_diff
+                    hours, remainder = divmod(int(remaining.total_seconds()), 3600)
+                    minutes, _ = divmod(remainder, 60)
+                    try:
+                        await message.delete()
+                    except:
+                        pass
+                    return await message.channel.send(f"⏳ يا {message.author.mention}, يجب عليك الانتظار لمدة **{hours} ساعة و {minutes} دقيقة** قبل إمكانية تسجيل الخروج مرة أخرى.", delete_after=5)
 
             update_user_status(guild_id, user_id, "خروج")
             current_pts = get_user_data(guild_id, user_id)
