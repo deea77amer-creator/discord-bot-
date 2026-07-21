@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
 
-# رابط الاتصال بقاعدة بيانات MongoDB (يمكنك استبداله برابط المنصة الخاص بك)
+# رابط الاتصال بقاعدة بيانات MongoDB
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 db_client = AsyncIOMotorClient(MONGO_URI)
 db = db_client["discord_bot_db"]
@@ -36,7 +36,7 @@ async def add_points(guild_id, user_id, amount):
         )
     return new_pts
 
-# جدول المنتجات في المتجر
+# جدول المنتجات في المتجر (تم توحيدها لتتوافق مع نظام المزاد والأسعار)
 SHOP_ITEMS = {
     "1": {"name": "سيف الأساطير", "price": 150, "desc": "سيف حربي قوي لزيادة هيبتك"},
     "2": {"name": "درع الماس", "price": 250, "desc": "درع واقي من الضربات القوية"},
@@ -95,6 +95,31 @@ class GameChoiceView(discord.ui.View):
     async def on_timeout(self):
         self.stop()
 
+# أداة تفاعلية لأمر الشراء الجديد
+class ShopPurchaseView(discord.ui.View):
+    def __init__(self, author_id, guild_id):
+        super().__init__(timeout=20.0)
+        self.value = None
+        self.author_id = author_id
+        self.guild_id = guild_id
+
+        for k, item in SHOP_ITEMS.items():
+            btn = discord.ui.Button(label=f"{k}. {item['name']} ({item['price']} نقطة)", style=discord.ButtonStyle.success, custom_id=f"shop_{k}")
+            btn.callback = self.create_callback(k)
+            self.add_item(btn)
+
+    def create_callback(self, item_key):
+        async def button_callback(interaction: discord.Interaction):
+            if interaction.user.id != self.author_id:
+                return await interaction.response.send_message("❌ هذه القائمة ليست لك!", ephemeral=True)
+            self.value = item_key
+            await interaction.response.defer()
+            self.stop()
+        return button_callback
+
+    async def on_timeout(self):
+        self.stop()
+
 class InteractiveGamesCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -134,10 +159,10 @@ class InteractiveGamesCog(commands.Cog):
 
     @commands.command(name="اسعار", aliases=["الاسعار"])
     async def prices_cmd(self, ctx):
-        embed = discord.Embed(title="🛒 قائمة أسعار المتجر", color=discord.Color.green())
+        embed = discord.Embed(title="🛒 قائمة أسعار المزاد ومتجر السيرفر", color=discord.Color.green())
         for k, v in SHOP_ITEMS.items():
-            embed.add_field(name=f"{k}. {v['name']}", value=f"السعر: **{v['price']}** نقطة\nالوصف: {v['desc']}", inline=False)
-        embed.set_footer(text="لشراء غرض اكتب: شراء [رقم الغرض] (مثال: شراء 1)")
+            embed.add_field(name=f"{k}. {v['name']}", value=f"السعر في المزاد: **{v['price']}** نقطة\nالوصف: {v['desc']}", inline=False)
+        embed.set_footer(text="لشراء غرض اكتب: شراء واختار من الأزرار التفاعلية")
         await ctx.send(embed=embed)
 
     @commands.Cog.listener()
@@ -163,8 +188,8 @@ class InteractiveGamesCog(commands.Cog):
             embed.add_field(
                 name="🎲 الألعاب والمتجر",
                 value="• `العاب` — لعرض قائمة الـ 26 لعبة.\n"
-                      "• `اسعار` — لعرض أسعار الأغراض.\n"
-                      "• `شراء` — لشراء الأغراض (مثال: شراء 1).\n"
+                      "• `اسعار` أو `مزاد` — لعرض أسعار الأغراض.\n"
+                      "• `شراء` — لفتح قائمة المزاد التفاعلية والشراء بالأزرار.\n"
                       "• `بيع` — لبيع أغراضك واسترداد النقاط (مثال: بيع سيف الأساطير).\n"
                       "• `رصيد @الشخص` — لمعرفة رصيد أي عضو.\n"
                       "• `تحويل @الشخص المبلغ` — لتحويل نقاط لعضو آخر.\n"
@@ -192,31 +217,50 @@ class InteractiveGamesCog(commands.Cog):
             await message.channel.send(embed=embed)
             return
 
-        # 3. نظام الأسعار
-        if text in ["اسعار", "!اسعار"]:
-            embed = discord.Embed(title="🛒 قائمة أسعار المتجر", color=discord.Color.green())
+        # 3. نظام الأسعار والمزاد
+        if text in ["اسعار", "!اسعار", "مزاد", "!مزاد"]:
+            embed = discord.Embed(title="🛒 قائمة أسعار المزاد ومتجر السيرفر", color=discord.Color.green())
             for k, v in SHOP_ITEMS.items():
-                embed.add_field(name=f"{k}. {v['name']}", value=f"السعر: **{v['price']}** نقطة\nالوصف: {v['desc']}", inline=False)
-            embed.set_footer(text="لشراء غرض اكتب: شراء [رقم الغرض] (مثال: شراء 1)")
+                embed.add_field(name=f"{k}. {v['name']}", value=f"السعر في المزاد: **{v['price']}** نقطة\nالوصف: {v['desc']}", inline=False)
+            embed.set_footer(text="لشراء غرض اكتب: شراء واختار من الأزرار التفاعلية")
             await message.channel.send(embed=embed)
             return
 
-        # 4. نظام الشراء التفاعلي (مثال: شراء 1)
-        if text.startswith("شراء ") or text.startswith("!شراء "):
-            parts = message.content.strip().split()
-            if len(parts) < 2 or not parts[1] in SHOP_ITEMS:
-                return await message.channel.send("❌ يرجى اختيار رقم غرض صحيح من المتجر. اكتب `اسعار` لمعرفة الأرقام.", delete_after=5)
+        # 4. نظام الشراء التفاعلي الجديد (أمر شراء يفتح أزرار لاختيار ما تريد وشراؤه)
+        if text in ["شراء", "!شراء", "/شراء"]:
+            view = ShopPurchaseView(user_id, guild_id)
+            embed = discord.Embed(
+                title="🛍️ قائمة المزاد والشراء التفاعلي",
+                description=f"يا {message.author.mention}! اختر الغرض الذي ترغب في شرائه من الأزرار أدناه:",
+                color=discord.Color.blue()
+            )
+            for k, item in SHOP_ITEMS.items():
+                embed.add_field(name=f"{item['name']}", value=f"السعر: `{item['price']}` نقطة", inline=True)
             
-            item_key = parts[1]
+            msg = await message.channel.send(embed=embed, view=view)
+            await view.wait()
+
+            if view.value is None:
+                try: await msg.delete()
+                except: pass
+                return await message.channel.send("⌛ انتهى الوقت ولم تقم باختيار أي غرض للشراء!")
+
+            item_key = view.value
             item = SHOP_ITEMS[item_key]
             current_pts = await get_user_points(guild_id, user_id)
-            
+
             if current_pts < item["price"]:
+                try: await msg.delete()
+                except: pass
                 return await message.channel.send(f"❌ لا توجد نقاط كافية لديك! رصيدك `{current_pts}` وتحتاج إلى `{item['price']}` نقطة.", delete_after=5)
-            
+
             await add_points(guild_id, user_id, -item["price"])
             await inventory_collection.insert_one({"guild_id": str(guild_id), "user_id": str(user_id), "item_name": item["name"]})
-            return await message.channel.send(f"✅ مبروك يا {message.author.mention}! اشتريت **{item['name']}** بنجاح مقابل `{item['price']}` نقطة!")
+            
+            success_text = f"✅ مبروك يا {message.author.mention}! تم الشراء من المزاد بنجاح وأضفت **{item['name']}** إلى حقيبتك مقابل `{item['price']}` نقطة!"
+            try: await msg.edit(content=success_text, embed=None, view=None)
+            except: await message.channel.send(success_text)
+            return
 
         # 5. نظام الممتلكات / الحقيبة
         if text in ["ممتلكات", "حقيبتي", "!حقيبتي"]:
@@ -231,7 +275,7 @@ class InteractiveGamesCog(commands.Cog):
                 items_list = "\n".join([f"• {item['item_name']}" for item in items])
                 embed.add_field(name="📦 الأغراض والممتلكات", value=items_list, inline=False)
             else:
-                embed.add_field(name="📦 الأغراض والممتلكات", value="حقيبتك فارغة حالياً! استخدم `اسعار` ثم `شراء [رقم]`.", inline=False)
+                embed.add_field(name="📦 الأغراض والممتلكات", value="حقيبتك فارغة حالياً! استخدم `مزاد` ثم `شراء`.", inline=False)
             return await message.channel.send(embed=embed)
 
         # 6. نظام البيع (استرداد النقاط)
@@ -316,19 +360,29 @@ class InteractiveGamesCog(commands.Cog):
             embed.set_footer(text=f"طلب بواسطة: {message.author.name}")
             return await message.channel.send(embed=embed)
 
-        # 10. أمر إعطاء النقاط (خاص بك: يتيح إضافة رصيد لأي شخص أو حتى لنفسك)
-        if text.startswith("نقاط ") or text.startswith("!نقاط ") or text.startswith("/نقاط "):
+        # 10. أمر إعطاء النقاط (يعمل بالمنشن الحقيقي، النصي، أو لنفسك مباشرة)
+        if text.startswith("نقاط") or text.startswith("!نقاط") or text.startswith("/نقاط"):
             parts = message.content.strip().split()
-            if len(parts) < 3:
-                return await message.channel.send("❌ الاستخدام الصحيح: `نقاط @الشخص المبلغ`", delete_after=5)
             
-            # تحديد المستهدف (إذا تم المنشن يختار المعني، وإذا لم يمنشن أحداً تذهب لك أنت كصاحب الأمر)
-            target_user = message.mentions[0] if message.mentions else message.author
+            if len(parts) < 2:
+                return await message.channel.send("❌ الاستخدام الصحيح: `نقاط [المبلغ]` أو `نقاط @الشخص [المبلغ]`", delete_after=5)
+            
+            target_user = message.author
+            amount_str = parts[-1]
+            
+            if message.mentions:
+                target_user = message.mentions[0]
+            else:
+                possible_name = parts[1].replace("@", "").strip()
+                for member in message.guild.members:
+                    if possible_name.lower() in member.name.lower() or (member.nick and possible_name.lower() in member.nick.lower()):
+                        target_user = member
+                        break
             
             try:
-                amount = int(parts[-1])
+                amount = int(amount_str)
             except ValueError:
-                return await message.channel.send("❌ يرجى كتابة رقم صحيح للمبلغ في نهاية الأمر.", delete_after=5)
+                return await message.channel.send("❌ يرجى التأكد من كتابة رقم صحيح للمبلغ في نهاية الأمر.", delete_after=5)
             
             new_tot = await add_points(guild_id, target_user.id, amount)
             await message.channel.send(f"✅ تم إضافة **{amount}** نقطة بنجاح إلى {target_user.mention}!\nرصيده الحالي: `{new_tot}` نقطة.")
