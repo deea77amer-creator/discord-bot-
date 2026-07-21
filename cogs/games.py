@@ -251,7 +251,7 @@ class InteractiveGamesCog(commands.Cog):
                       "• `تحويل @الشخص المبلغ` — لتحويل نقاط لعضو آخر.\n"
                       "• `توب` — لعرض قائمة أفضل 10 لاعبين في السيرفر.\n"
                       "• `ممتلكات` أو `حقيبتي` — لعرض محتويات حقيبتك.\n"
-                      "• `نقاط @الشخص المبلغ` — (خاص بصاحب السيرفر) لإضافة أو خصم النقاط.\n"
+                      "• `اعطاء @الشخص المبلغ` — (خاص بصاحب السيرفر) لإضافة أو خصم النقاط.\n"
                       "• *ملاحظة:* يمكنك كتابة أي لعبة ثم منشن لصديق (مثال: `نرد @فلان`) لدعوته لتحدي ثنائي بأزرار قبول ورفض!",
                 inline=False
             )
@@ -436,13 +436,13 @@ class InteractiveGamesCog(commands.Cog):
             embed.set_footer(text=f"طلب بواسطة: {message.author.name}")
             return await message.channel.send(embed=embed)
 
-        # 10. أمر إعطاء النقاط الخاص بصاحب السيرفر
-        if first_word == "نقاط":
+        # 10. أمر الإعطاء الخاص بصاحب السيرفر
+        if first_word == "اعطاء":
             if message.author != message.guild.owner:
                 return await message.channel.send("❌ عذراً، هذا الأمر خاص بصاحب السيرفر فقط!", delete_after=5)
             
             if len(parts) < 3 or not message.mentions:
-                return await message.channel.send("❌ الاستخدام الصحيح لصاحب السيرفر: `نقاط @الشخص المبلغ`", delete_after=5)
+                return await message.channel.send("❌ الاستخدام الصحيح لصاحب السيرفر: `اعطاء @الشخص المبلغ`", delete_after=5)
             
             target_user = message.mentions[0]
             try:
