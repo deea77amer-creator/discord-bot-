@@ -36,11 +36,14 @@ async def add_points(guild_id, user_id, amount):
         )
     return new_pts
 
-# جدول المنتجات في المتجر (تم توحيدها لتتوافق مع نظام المزاد والأسعار)
+# جدول المنتجات في المتجر (تمت إضافة منتجات جديدة وتحديث الأسعار لتشمل أكثر من منتج)
 SHOP_ITEMS = {
     "1": {"name": "سيف الأساطير", "price": 150, "desc": "سيف حربي قوي لزيادة هيبتك"},
     "2": {"name": "درع الماس", "price": 250, "desc": "درع واقي من الضربات القوية"},
-    "3": {"name": "جرعة حظ ذهبية", "desc": "تزيد حظك في الألعاب", "price": 100}
+    "3": {"name": "جرعة حظ ذهبية", "price": 100, "desc": "تزيد حظك في الألعاب"},
+    "4": {"name": "خنجر الظل", "price": 200, "desc": "خنجر خفي وسريع للضربات المفاجئة"},
+    "5": {"name": "تَفَاحَةُ الطَّاقَةِ", "price": 50, "desc": "تمنحك انتعاشاً سريعاً ونقاط إضافية"},
+    "6": {"name": "عباءة الاختفاء", "price": 350, "desc": "تعطيك حماية كاملة وهيبة أسطورية"}
 }
 
 GAMES_LIST = [
@@ -99,31 +102,96 @@ class GameChoiceView(discord.ui.View):
     async def on_timeout(self):
         self.stop()
 
-# أداة تفاعلية لأمر الشراء الجديد
+# أداة الأزرار لقبول أو رفض التحدي الثنائي بين اللاعبين لأي لعبة
+class DuelAcceptView(discord.ui.View):
+    def __init__(self, target_user_id):
+        super().__init__(timeout=15.0)
+        self.value = None
+        self.target_user_id = target_user_id
+
+        # زر القبول
+        accept_btn = discord.ui.Button(label="قبول ✅", style=discord.ButtonStyle.success, custom_id="duel_accept")
+        accept_btn.callback = self.accept_callback
+        self.add_item(accept_btn)
+
+        # زر الرفض
+        reject_btn = discord.ui.Button(label="رفض ❌", style=discord.ButtonStyle.danger, custom_id="duel_reject")
+        reject_btn.callback = self.reject_callback
+        self.add_item(reject_btn)
+
+    async def accept_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.target_user_id:
+            return await interaction.response.send_message("❌ هذا التحدي ليس موجهة لك!", ephemeral=True)
+        self.value = "accept"
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        self.stop()
+
+    async def reject_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.target_user_id:
+            return await interaction.response.send_message("❌ هذا التحدي ليس موجهة لك!", ephemeral=True)
+        self.value = "reject"
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        self.stop()
+
+    async def on_timeout(self):
+        self.stop()
+
+# أداة تفاعلية لأمر الشراء الجديد (تتضمن اختيار المنتج والكمية)
 class ShopPurchaseView(discord.ui.View):
     def __init__(self, author_id, guild_id):
-        super().__init__(timeout=20.0)
-        self.value = None
+        super().__init__(timeout=30.0)
+        self.selected_item = None
+        self.selected_quantity = 1
         self.author_id = author_id
         self.guild_id = guild_id
+        self.is_finished = False
 
+        # إضافة أزرار المنتجات
         for k, item in SHOP_ITEMS.items():
-            btn = discord.ui.Button(label=f"{k}. {item['name']} ({item['price']} نقطة)", style=discord.ButtonStyle.success, custom_id=f"shop_{k}")
-            btn.callback = self.create_callback(k)
+            btn = discord.ui.Button(label=f"{k}. {item['name']} ({item['price']}p)", style=discord.ButtonStyle.secondary, custom_id=f"shop_{k}")
+            btn.callback = self.create_item_callback(k)
             self.add_item(btn)
 
-    def create_callback(self, item_key):
+        # إضافة أزرار لاختيار الكمية
+        for q in [1, 2, 3, 5]:
+            q_btn = discord.ui.Button(label=f"كمية: {q}", style=discord.ButtonStyle.primary, custom_id=f"qty_{q}")
+            q_btn.callback = self.create_qty_callback(q)
+            self.add_item(q_btn)
+
+        # زر لتأكيد عملية الشراء النهائية
+        confirm_btn = discord.ui.Button(label="تأكيد الشراء ✅", style=discord.ButtonStyle.success, custom_id="shop_confirm", row=4)
+        confirm_btn.callback = self.confirm_callback
+        self.add_item(confirm_btn)
+
+    def create_item_callback(self, item_key):
         async def button_callback(interaction: discord.Interaction):
-            try:
-                if interaction.user.id != self.author_id:
-                    return await interaction.response.send_message("❌ هذه القائمة ليست لك!", ephemeral=True)
-                self.value = item_key
-                if not interaction.response.is_done():
-                    await interaction.response.defer()
-                self.stop()
-            except Exception as e:
-                print(f"Error in ShopPurchaseView callback: {e}")
+            if interaction.user.id != self.author_id:
+                return await interaction.response.send_message("❌ هذه القائمة ليست لك!", ephemeral=True)
+            self.selected_item = item_key
+            item_name = SHOP_ITEMS[item_key]["name"]
+            await interaction.response.send_message(f"📌 تم اختيار المنتج: **{item_name}** (الكمية الحالية: {self.selected_quantity}). اضغط الآن على زر **تأكيد الشراء ✅**", ephemeral=True)
         return button_callback
+
+    def create_qty_callback(self, qty):
+        async def button_callback(interaction: discord.Interaction):
+            if interaction.user.id != self.author_id:
+                return await interaction.response.send_message("❌ هذه القائمة ليست لك!", ephemeral=True)
+            self.selected_quantity = qty
+            await interaction.response.send_message(f"🔢 تم تحديد الكمية: **{qty}**.", ephemeral=True)
+        return button_callback
+
+    async def confirm_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("❌ هذه القائمة ليست لك!", ephemeral=True)
+        if not self.selected_item:
+            return await interaction.response.send_message("❌ يرجى اختيار منتج أولاً بالنقر على زره الخاص قبل التأكيد!", ephemeral=True)
+        
+        self.is_finished = True
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        self.stop()
 
     async def on_timeout(self):
         self.stop()
@@ -162,7 +230,7 @@ class InteractiveGamesCog(commands.Cog):
         
         embed.add_field(name="📋 الألعاب (1 - 13)", value=part1, inline=True)
         embed.add_field(name="📋 الألعاب (14 - 26)", value=part2, inline=True)
-        embed.set_footer(text="اكتب اسم اللعبة للبدء فوراً!")
+        embed.set_footer(text="اكتب اسم اللعبة للبدء فوراً! (يمكنك تحدي شخص بكتابة اسم اللعبة ثم منشن الشخص)")
         await ctx.send(embed=embed)
 
     @commands.command(name="اسعار", aliases=["الاسعار"])
@@ -170,7 +238,7 @@ class InteractiveGamesCog(commands.Cog):
         embed = discord.Embed(title="🛒 قائمة أسعار المزاد ومتجر السيرفر", color=discord.Color.green())
         for k, v in SHOP_ITEMS.items():
             embed.add_field(name=f"{k}. {v['name']}", value=f"السعر في المزاد: **{v['price']}** نقطة\nالوصف: {v['desc']}", inline=False)
-        embed.set_footer(text="لشراء غرض اكتب: شراء واختار من الأزرار التفاعلية")
+        embed.set_footer(text="لشراء غرض اكتب: شراء واختار من الأزرار التفاعلية مع الكمية")
         await ctx.send(embed=embed)
 
     @commands.Cog.listener()
@@ -189,6 +257,13 @@ class InteractiveGamesCog(commands.Cog):
         if channel_id != self.target_channel_id:
             return
 
+        # استخراج أول كلمة في الرسالة لمعرفة اسم الأمر (حتى لو تبعتها منشن أو أرقام)
+        parts = message.content.strip().split()
+        if not parts:
+            return
+        
+        first_word = parts[0].lower().replace("!", "").replace("/", "")
+
         # 1. قائمة الأوامر العامة
         if text in ["اوامر", "!اوامر", "/اوامر"]:
             embed = discord.Embed(
@@ -200,12 +275,13 @@ class InteractiveGamesCog(commands.Cog):
                 name="🎲 الألعاب والمتجر",
                 value="• `العاب` — لعرض قائمة الـ 26 لعبة.\n"
                       "• `اسعار` أو `مزاد` — لعرض أسعار الأغراض.\n"
-                      "• `شراء` — لفتح قائمة المزاد التفاعلية والشراء بالأزرار.\n"
-                      "• `بيع` — لبيع أغراضك واسترداد النقاط (مثال: بيع سيف الأساطير).\n"
+                      "• `شراء` — لفتح قائمة المزاد التفاعلية لاختيار المنتج والكمية وتأكيد الشراء.\n"
+                      "• `بيع` — لبيع أغراضك واسترداد النقاط.\n"
                       "• `رصيد @الشخص` — لمعرفة رصيد أي عضو.\n"
                       "• `تحويل @الشخص المبلغ` — لتحويل نقاط لعضو آخر.\n"
                       "• `توب` — لعرض قائمة أفضل 10 لاعبين في السيرفر.\n"
-                      "• `ممتلكات` أو `حقيبتي` — لعرض محتويات حقيبتك.",
+                      "• `ممتلكات` أو `حقيبتي` — لعرض محتويات حقيبتك.\n"
+                      "• *ملاحظة:* يمكنك كتابة أي لعبة ثم منشن لصديق (مثال: `نرد @فلان`) لدعوته لتحدي ثنائي بأزرار قبول ورفض!",
                 inline=False
             )
             embed.set_footer(text="جميع الأوامر تعمل في القناة المخصصة!")
@@ -224,7 +300,7 @@ class InteractiveGamesCog(commands.Cog):
             
             embed.add_field(name="📋 الألعاب (1 - 13)", value=part1, inline=True)
             embed.add_field(name="📋 الألعاب (14 - 26)", value=part2, inline=True)
-            embed.set_footer(text="اكتب اسم اللعبة للبدء فوراً!")
+            embed.set_footer(text="اكتب اسم اللعبة للبدء فوراً! (أو اكتب اسم اللعبة مع منشن صديق للتحدي)")
             await message.channel.send(embed=embed)
             return
 
@@ -233,42 +309,47 @@ class InteractiveGamesCog(commands.Cog):
             embed = discord.Embed(title="🛒 قائمة أسعار المزاد ومتجر السيرفر", color=discord.Color.green())
             for k, v in SHOP_ITEMS.items():
                 embed.add_field(name=f"{k}. {v['name']}", value=f"السعر في المزاد: **{v['price']}** نقطة\nالوصف: {v['desc']}", inline=False)
-            embed.set_footer(text="لشراء غرض اكتب: شراء واختار من الأزرار التفاعلية")
+            embed.set_footer(text="لشراء غرض اكتب: شراء واختار المنتج والكمية بالأزرار")
             await message.channel.send(embed=embed)
             return
 
-        # 4. نظام الشراء التفاعلي الجديد (أمر شراء يفتح أزرار لاختيار ما تريد وشراؤه)
+        # 4. نظام الشراء التفاعلي الجديد (مع دعم اختيار المنتج، الكمية، وتأكيد الشراء)
         if text in ["شراء", "!شراء", "/شراء"]:
             view = ShopPurchaseView(user_id, guild_id)
             embed = discord.Embed(
                 title="🛍️ قائمة المزاد والشراء التفاعلي",
-                description=f"يا {message.author.mention}! اختر الغرض الذي ترغب في شرائه من الأزرار أدناه:",
+                description=f"يا {message.author.mention}! اختر المنتج أولاً، ثم حدد الكمية، ثم اضغط على زر **تأكيد الشراء ✅**:",
                 color=discord.Color.blue()
             )
             for k, item in SHOP_ITEMS.items():
-                embed.add_field(name=f"{item['name']}", value=f"السعر: `{item['price']}` نقطة", inline=True)
+                embed.add_field(name=f"{k}. {item['name']}", value=f"السعر: `{item['price']}` نقطة", inline=True)
             
             msg = await message.channel.send(embed=embed, view=view)
             await view.wait()
 
-            if view.value is None:
+            if not view.is_finished or view.selected_item is None:
                 try: await msg.delete()
                 except: pass
-                return await message.channel.send("⌛ انتهى الوقت ولم تقم باختيار أي غرض للشراء!")
+                return await message.channel.send("⌛ انتهى الوقت أو لم تقم بتأكيد عملية الشراء!")
 
-            item_key = view.value
+            item_key = view.selected_item
+            quantity = view.selected_quantity
             item = SHOP_ITEMS[item_key]
+            total_price = item["price"] * quantity
             current_pts = await get_user_points(guild_id, user_id)
 
-            if current_pts < item["price"]:
+            if current_pts < total_price:
                 try: await msg.delete()
                 except: pass
-                return await message.channel.send(f"❌ لا توجد نقاط كافية لديك! رصيدك `{current_pts}` وتحتاج إلى `{item['price']}` نقطة.", delete_after=5)
+                return await message.channel.send(f"❌ لا توجد نقاط كافية لديك! رصيدك `{current_pts}` وتحتاج إلى `{total_price}` نقطة (`{item['price']}` × {quantity}).", delete_after=5)
 
-            await add_points(guild_id, user_id, -item["price"])
-            await inventory_collection.insert_one({"guild_id": str(guild_id), "user_id": str(user_id), "item_name": item["name"]})
+            await add_points(guild_id, user_id, -total_price)
             
-            success_text = f"✅ مبروك يا {message.author.mention}! تم الشراء من المزاد بنجاح وأضفت **{item['name']}** إلى حقيبتك مقابل `{item['price']}` نقطة!"
+            # إدخال المنتجات بعدد الكمية المحددة في الحقيبة
+            for _ in range(quantity):
+                await inventory_collection.insert_one({"guild_id": str(guild_id), "user_id": str(user_id), "item_name": item["name"]})
+            
+            success_text = f"✅ مبروك يا {message.author.mention}! تم الشراء من المزاد بنجاح وأضفت **{quantity}x {item['name']}** إلى حقيبتك مقابل إجمالي `{total_price}` نقطة!"
             try: await msg.edit(content=success_text, embed=None, view=None)
             except: await message.channel.send(success_text)
             return
@@ -283,7 +364,13 @@ class InteractiveGamesCog(commands.Cog):
             embed.add_field(name="💰 رصيد النقاط", value=f"`{pts}` نقطة", inline=False)
             
             if items:
-                items_list = "\n".join([f"• {item['item_name']}" for item in items])
+                # تجميع الممتلكات وحساب عدد كل عنصر
+                item_counts = {}
+                for item in items:
+                    name = item['item_name']
+                    item_counts[name] = item_counts.get(name, 0) + 1
+                
+                items_list = "\n".join([f"• {name} (العدد: {count})" for name, count in item_counts.items()])
                 embed.add_field(name="📦 الأغراض والممتلكات", value=items_list, inline=False)
             else:
                 embed.add_field(name="📦 الأغراض والممتلكات", value="حقيبتك فارغة حالياً! استخدم `مزاد` ثم `شراء`.", inline=False)
@@ -306,7 +393,7 @@ class InteractiveGamesCog(commands.Cog):
             new_pts = await add_points(guild_id, user_id, refund)
             return await message.channel.send(f"✅ تم بيع الغرض بنجاح واسترداد **{refund} نقطة**! رصيدك الحالي: `{new_pts}`")
 
-        # 7. نظام عرض رصيد الآخرين (مثال: رصيد @الشخص)
+        # 7. نظام عرض رصيد الآخرين
         if text.startswith("رصيد ") or text.startswith("!رصيد "):
             if message.mentions:
                 target_user = message.mentions[0]
@@ -316,7 +403,7 @@ class InteractiveGamesCog(commands.Cog):
                 pts = await get_user_points(guild_id, user_id)
                 return await message.channel.send(f"👤 العضو: {message.author.mention}\n💰 رصيدك الحالي: `{pts}` نقطة")
 
-        # 8. نظام تحويل النقاط (مثال: تحويل @الشخص 100)
+        # 8. نظام تحويل النقاط
         if text.startswith("تحويل ") or text.startswith("!تحويل "):
             parts = message.content.strip().split()
             if len(parts) < 3 or not message.mentions:
@@ -343,7 +430,7 @@ class InteractiveGamesCog(commands.Cog):
             
             return await message.channel.send(f"💸 تم تحويل **{amount}** نقطة بنجاح إلى {target_user.mention}!\n💰 رصيدك الجديد: `{new_sender_pts}` نقطة.")
 
-        # 9. أمر التوب (أفضل 10 لاعبين في السيرفر) بالعربي بالكامل
+        # 9. أمر التوب (أفضل 10 لاعبين في السيرفر)
         if text in ["توب", "!توب", "/توب"]:
             cursor = users_collection.find({"guild_id": str(guild_id)}).sort("points", -1).limit(10)
             top_users = await cursor.to_list(length=10)
@@ -371,124 +458,125 @@ class InteractiveGamesCog(commands.Cog):
             embed.set_footer(text=f"طلب بواسطة: {message.author.name}")
             return await message.channel.send(embed=embed)
 
-        # 10. أمر إضافة أو خصم النقاط (خاص بصاحب السيرفر أو المسؤولين Administrator فقط)
-        if text.startswith("نقاط") or text.startswith("!نقاط") or text.startswith("/نقاط"):
-            # التحقق من صلاحية Administrator أو أن المستخدم هو مالك السيرفر
+        # 10. أمر إضافة أو خصم النقاط
+        if first_word == "نقاط":
             if not message.author.guild_permissions.administrator and message.author != message.guild.owner:
                 return await message.channel.send("❌ عذراً، هذا الأمر خاص بصاحب السيرفر والمشرفين (Administrator) فقط!", delete_after=5)
             
-            parts = message.content.strip().split()
             if len(parts) < 2:
-                return await message.channel.send("❌ الاستخدام الصحيح: `نقاط @الشخص المبلغ` أو `نقاط [ID] المبلغ`", delete_after=5)
+                return await message.channel.send("❌ الاستخدام الصحيح: `نقاط @الشخص المبلغ` أو `نقاط المبلغ @الشخص`", delete_after=5)
             
             target_user = None
-            amount_str = parts[-1]
+            amount = None
             
-            # محاولة جلب العضو من المنشن أو الـ ID أو الاسم
             if message.mentions:
                 target_user = message.mentions[0]
-            else:
-                target_identifier = parts[1].strip()
-                if target_identifier.isdigit():
-                    target_user = message.guild.get_member(int(target_identifier))
-                else:
-                    possible_name = target_identifier.replace("@", "").lower()
-                    for member in message.guild.members:
-                        if possible_name in member.name.lower() or (member.nick and possible_name in member.nick.lower()):
-                            target_user = member
-                            break
             
+            for part in parts[1:]:
+                clean_part = part.replace("<@!", "").replace("<@", "").replace(">", "").strip()
+                if clean_part.lstrip('-').isdigit():
+                    if amount is None:
+                        amount = int(clean_part)
+                elif not target_user:
+                    if clean_part.isdigit():
+                        target_user = message.guild.get_member(int(clean_part))
+                    else:
+                        possible_name = clean_part.replace("@", "").lower()
+                        for member in message.guild.members:
+                            if possible_name in member.name.lower() or (member.nick and possible_name in member.nick.lower()):
+                                target_user = member
+                                break
+
             if not target_user:
-                return await message.channel.send("❌ لم يتم العثور على العضو المطلوب. تأكد من المنشن أو الـ ID الصحيح.", delete_after=5)
-            
-            try:
-                amount = int(amount_str)
-            except ValueError:
-                return await message.channel.send("❌ يرجى التأكد من كتابة رقم صحيح للمبلغ (سواء للإضافة أو الخصم مثل: 50 أو -50).", delete_after=5)
-            
+                target_user = message.author
+
+            if amount is None:
+                return await message.channel.send("❌ يرجى كتابة المبلغ بشكل صحيح (مثال: `نقاط @الشخص 100` أو `نقاط 100`)", delete_after=5)
+
             new_tot = await add_points(guild_id, target_user.id, amount)
             action_word = "إضافة" if amount >= 0 else "خصم"
             await message.channel.send(f"✅ تم {action_word} **{abs(amount)}** نقطة بنجاح لـ {target_user.mention}!\nرصيده الحالي: `{new_tot}` نقطة.")
             return
 
-        # 11. حل مشكلة أمر النرد بـ منشن ومبلغ (مثال: نرد @شخص 50)
-        if text.startswith("نرد "):
-            parts = message.content.strip().split()
-            if message.mentions:
-                target_user = message.mentions[0]
-                if target_user.id == user_id:
-                    return await message.channel.send("❌ لا يمكنك تحدي نفسك في النرد!", delete_after=5)
-                
-                amount = 50
-                for p in parts:
-                    if p.isdigit():
-                        amount = int(p)
-                        break
-                
-                rem = self.check_cooldown(user_id, "نرد_تحدي")
-                if rem > 0:
-                    mins, secs = divmod(rem, 60)
-                    return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** لتحدي النرد مرة أخرى!", delete_after=5)
+        # 11. دعم نظام التحدي الثنائي (قبول / رفض) والمعدل بحيث تظهر الخيارات للاعب المستهدف (أو البادئ حسب من تحدى من)
+        matched_game = next((g for g in GAMES_LIST if g["cmd"] == first_word), None)
+        if matched_game and message.mentions:
+            target_user = message.mentions[0]
+            if target_user.id == user_id:
+                return await message.channel.send("❌ لا يمكنك تحدي نفسك!", delete_after=5)
+            if target_user.bot:
+                return await message.channel.send("❌ لا يمكنك تحدي بوت!", delete_after=5)
 
-                user_pts = await get_user_points(guild_id, user_id)
-                target_pts = await get_user_points(guild_id, target_user.id)
+            game_name = matched_game["name"]
+            view = DuelAcceptView(target_user.id)
+            embed = discord.Embed(
+                title=f"⚔️ تحدي ثنائي: {game_name}",
+                description=f"يا {target_user.mention}! أرسل لك {message.author.mention} تحدياً في لعبة **({game_name})**.\nاضغط على الزر أدناه للقبول أو الرفض خلال 15 ثانية:",
+                color=discord.Color.orange()
+            )
+            msg = await message.channel.send(embed=embed, view=view)
+            await view.wait()
 
-                if user_pts < amount or target_pts < amount:
-                    return await message.channel.send(f"❌ أحد الطرفين لا يملك نقاط كافية لرهان بقيمة `{amount}` نقطة!", delete_after=5)
+            if view.value is None or view.value == "reject":
+                try: await msg.delete()
+                except: pass
+                status_msg = "رفض التحدي" if view.value == "reject" else "انتهى الوقت ولم يستجب"
+                return await message.channel.send(f"⌛ {target_user.mention} {status_msg}!")
 
-                await message.channel.send(f"🎲 {target_user.mention}, لقد تحداك {message.author.mention} في لعبة النرد برهان **{amount} نقطة**!\nاكتب `قبول` في الشات خلال 15 ثانية للموافقة:")
-                def check_accept(m):
-                    return m.author.id == target_user.id and m.channel.id == channel_id and m.content.strip() == "قبول"
-                try:
-                    await self.bot.wait_for("message", timeout=15.0, check=check_accept)
-                    r1 = random.randint(1, 6)
-                    r2 = random.randint(1, 6)
-                    
-                    if r1 > r2:
-                        await add_points(guild_id, target_user.id, -amount)
-                        new_p = await add_points(guild_id, user_id, amount)
-                        await message.channel.send(f"🏆 النرد أسفر عن: ({message.author.name}: `{r1}` VS {target_user.name}: `{r2}`).\nفاز {message.author.mention} وربح `{amount}` نقطة! رصيده الجديد: `{new_p}`")
-                    elif r2 > r1:
-                        await add_points(guild_id, user_id, -amount)
-                        new_p = await add_points(guild_id, target_user.id, amount)
-                        await message.channel.send(f"🏆 النرد أسفر عن: ({message.author.name}: `{r1}` VS {target_user.name}: `{r2}`).\nفاز {target_user.mention} وربح `{amount}` نقطة! رصيده الجديد: `{new_p}`")
-                    else:
-                        await message.channel.send(f"🤝 تعادل في النرد (`{r1}` مقابل `{r2}`)! لم يتم خصم أو إضافة نقاط.")
-                except asyncio.TimeoutError:
-                    await message.channel.send(f"⌛ انتهى الوقت ولم يقبل {target_user.mention} التحدي.")
-                return
+            try: await msg.delete()
+            except: pass
 
-        # 12. حل مشكلة أمر التحدي المباشر بين لاعبين
-        if text.startswith("تحدي "):
-            if message.mentions:
-                target_user = message.mentions[0]
-                if target_user.id == user_id:
-                    return await message.channel.send("❌ لا يمكنك تحدي نفسك!", delete_after=5)
+            # منطق التحدي الثنائي المحدث:
+            # - لو هو تحداني (شخص آخر يتحداك): انت (المستهدف) تطلع لك الخيارات ولازم تختار، لو خسرت النقاط تروح له.
+            # - لو أنا تحديته (أنا صاحب الأمر): هو يطلع له خيارات كأنه يلعب اللعبة ويختار، ولو هو خسر تجيني النقاط.
+            
+            # بما أن التحدي تم توجيهه من البادئ (message.author) إلى المستهدف (target_user):
+            # سنطلب من المستهدف (target_user) اللعب والاختيار عبر أزرار تفاعلية:
+            duel_options = ["الخيار الأول (صحيح 🟢)", "الخيار الثاني (خاطئ ❌)", "الخيار الثالث (خاطئ ❌)"]
+            random.shuffle(duel_options)
+            correct_opt = duel_options[0] # للاساة نجعل الأول هو الصحيح أو نختار عشوائياً
 
-                rem = self.check_cooldown(user_id, "مبارزة")
-                if rem > 0:
-                    mins, secs = divmod(rem, 60)
-                    return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للمبارزة مرة أخرى!", delete_after=5)
+            game_view = GameChoiceView(duel_options, target_user.id)
+            game_embed = discord.Embed(
+                title=f"🎮 معركة ثنائية: {game_name}",
+                description=f"دورك يا {target_user.mention}! اختر الإجابة الصحيحة للتحدي المقدم من {message.author.mention}:",
+                color=discord.Color.blurple()
+            )
+            game_msg = await message.channel.send(embed=game_embed, view=game_view)
+            await game_view.wait()
 
-                await message.channel.send(f"⚔️ {target_user.mention}, أرسل لك {message.author.mention} تحدياً مباشراً!\nاكتب `موافقة` خلال 15 ثانية لدخول المعركة:")
-                def check_duel(m):
-                    return m.author.id == target_user.id and m.channel.id == channel_id and m.content.strip() == "موافقة"
-                try:
-                    await self.bot.wait_for("message", timeout=15.0, check=check_duel)
-                    winner = random.choice([message.author, target_user])
-                    loser = target_user if winner == message.author else message.author
-                    
-                    await add_points(guild_id, loser.id, -30)
-                    new_win_pts = await add_points(guild_id, winner.id, 50)
-                    
-                    await message.channel.send(f"🔥 اشتعلت المعركة بين المحاربين!\n👑 البطل الفائز: {winner.mention} وحصل على **+50 نقطة** (رصيده: {new_win_pts})\n💀 الخاسر: {loser.mention} وخسر **-30 نقطة**.")
-                except asyncio.TimeoutError:
-                    await message.channel.send(f"⌛ انتهى الوقت ولم يستجب {target_user.mention} للتحدي.")
-                return
+            if game_view.value is None:
+                try: await game_msg.delete()
+                except: pass
+                # لو انتهى الوقت يعتبر خاسراً وتذهب النقاط للبادئ
+                await add_points(guild_id, target_user.id, -20)
+                win_pts = await add_points(guild_id, user_id, 40)
+                return await message.channel.send(f"⌛ انتهى الوقت ولم يختار {target_user.mention}!\n👑 الفائز بالافتراض: {message.author.mention} وحصل على **+40 نقطة**\n💀 الخاسر: {target_user.mention} وخسر **-20 نقطة**.")
 
-        # --- الألعاب التفاعلية المصممة خصيصاً (بدون أسئلة عامة مكررة) ---
+            # افتراض أن الإجابة الأولى أو اختيار محدد هو الصحيح (أو نجعل الاختيار يعتمد على نتيجة حظ أو شرط دقيق)
+            # هنا نجعل الفوز يعتمد على مطابقة اختيار اللاعب للإجابة الصحيحة المعينة
+            chosen_answer = game_view.value
+            # للتبسيط والبساطة الحماسية: نحدد إجابة صحيحة عشوائية من الخيارات المتاحة
+            correct_answer = duel_options[0] 
 
-        # 1. لعبة صيد الكنز (البحث عن الكنز)
+            if chosen_answer == correct_answer:
+                # المستهدف فاز بالتحدي (هو من تحداني وعكسنا الآفة أو العكس)
+                win_pts = await add_points(guild_id, target_user.id, 40)
+                loss_pts = await add_points(guild_id, user_id, -20)
+                result_msg = f"🏆 فاز {target_user.mention} بالتحدي واختار الإجابة الصحيحة!\n حصل على **+40 نقطة** (رصيده: `{win_pts}`)\n وخسر المحدي {message.author.mention} **-20 نقطة**."
+            else:
+                # المستهدف خسر، تجيني النقاط (البادئ)
+                win_pts = await add_points(guild_id, user_id, 40)
+                loss_pts = await add_points(guild_id, target_user.id, -20)
+                result_msg = f"💀 خسر {target_user.mention} التحدي باختياره الخاطئ!\n تذهب النقاط للبادئ {message.author.mention} ليحصل على **+40 نقطة** (رصيده: `{win_pts}`)\n وخسر {target_user.mention} **-20 نقطة**."
+
+            try: await game_msg.edit(content=result_msg, embed=None, view=None)
+            except: await message.channel.send(result_msg)
+            return
+
+        # --- الألعاب التفاعلية الفردية العادية ---
+
+        # 1. لعبة صيد الكنز
         if text == "كنز" or text == "صيد":
             rem = self.check_cooldown(user_id, "صيد")
             if rem > 0:
@@ -532,7 +620,7 @@ class InteractiveGamesCog(commands.Cog):
             except: await message.channel.send(f"🎣 **نتيجة الصيد:**{res_desc}")
             return
 
-        # 2. لعبة النرد السريع (اختيار عالي ومنخفض)
+        # 2. لعبة النرد السريع
         if text == "نرد":
             rem = self.check_cooldown(user_id, "نرد")
             if rem > 0:
@@ -565,7 +653,7 @@ class InteractiveGamesCog(commands.Cog):
             except: await message.channel.send(result_text)
             return
 
-        # 3. عجلة الحظ والأبواب (فتح صناديق وأبواب)
+        # 3. عجلة الحظ والأبواب
         elif text in ["حظ", "روليت"]:
             rem = self.check_cooldown(user_id, "حظ")
             if rem > 0:
@@ -596,7 +684,7 @@ class InteractiveGamesCog(commands.Cog):
             except: await message.channel.send(res_text)
             return
 
-        # 4. حجرة ورقة مقص (لعبة تعتمد على الحظ والمهارة)
+        # 4. حجرة ورقة مقص
         elif text in ["مقص", "حجر ورقة مقص"]:
             rem = self.check_cooldown(user_id, "مقص")
             if rem > 0:
@@ -629,17 +717,16 @@ class InteractiveGamesCog(commands.Cog):
             except: await message.channel.send(res_text)
             return
 
-        # 5. الألعاب التفاعلية الأخرى المتنوعة (تخطي الأسئلة المكررة وتصميم ألعاب فريدة مثل سرعة الضغط، هروب الوحش، متاهة، قنبلة مؤقتة، إلخ)
-        elif text in [g["cmd"] for g in GAMES_LIST]:
-            game_obj = next(g for g in GAMES_LIST if g["cmd"] == text)
+        # 5. باقي الألعاب التفاعلية (26 لعبة)
+        elif matched_game:
+            game_obj = matched_game
             game_name = game_obj["name"]
             
-            rem = self.check_cooldown(user_id, text)
+            rem = self.check_cooldown(user_id, first_word)
             if rem > 0:
                 mins, secs = divmod(rem, 60)
                 return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للعب ({game_name}) مرة أخرى!", delete_after=5)
 
-            # تخصيص ألعاب فريدة ومختلفة كلياً عن نظام الأسئلة التقليدية
             unique_game_scenarios = {
                 "تخمين": {
                     "title": "🔐 لعبة تخمين الرقم السري",
@@ -769,7 +856,7 @@ class InteractiveGamesCog(commands.Cog):
                 }
             }
 
-            scenario = unique_game_scenarios.get(text, {
+            scenario = unique_game_scenarios.get(first_word, {
                 "title": f"🎮 لعبة تفاعلية: {game_name}",
                 "desc": f"اجتاز تحدي {game_name} بنجاح عبر اختيار الإجابة الصحيحة:",
                 "options": ["الخيار الأول", "الخيار الثاني", "الخيار الثالث", "الخيار الرابع"],
