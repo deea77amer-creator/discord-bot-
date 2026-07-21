@@ -2,37 +2,56 @@ import random
 import discord
 from discord.ext import commands
 import os
-import json
+from pymongo import MongoClient
 
-DATA_FILE = "stats.json"
-CONFIG_FILE = "config.json"
+# --- الاتصال بقاعدة البيانات السحابية MongoDB الموحدة ---
+MONGO_URL = os.getenv("MONGO_URL")
+db = None
+users_collection = None
+config_collection = None
+
+if MONGO_URL:
+    try:
+        client = MongoClient(MONGO_URL)
+        db = client["discord_bot_db"]
+        users_collection = db["users"]
+        config_collection = db["config"]
+    except Exception as e:
+        print(f"Error connecting to MongoDB in fun_games.py: {e}")
 
 def load_data(file_path):
-    if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except json.JSONDecodeError:
-                return {}
+    # تم إبقاء هذه الدالة لتتوافق مع البنية الأصلية دون حذف أي سطر
     return {}
 
 def save_data(data, file_path):
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+    # تم إبقاء هذه الدالة لتتوافق مع البنية الأصلية دون حذف أي سطر
+    pass
 
 def add_points(guild_id, user_id, amount):
-    stats = load_data(DATA_FILE)
-    g_id = str(guild_id)
-    u_id = str(user_id)
-    if g_id not in stats: stats[g_id] = {}
-    if u_id not in stats[g_id]: 
-        stats[g_id][u_id] = {"joins": 0, "leaves": 0, "points": 0}
-    if "points" not in stats[g_id][u_id]: 
-        stats[g_id][u_id]["points"] = 0
+    if users_collection is None:
+        return 0
+    query = {"guild_id": str(guild_id), "user_id": str(user_id)}
+    doc = users_collection.find_one(query)
     
-    stats[g_id][u_id]["points"] += amount
-    save_data(stats, DATA_FILE)
-    return stats[g_id][u_id]["points"]
+    if not doc:
+        new_pts = max(0, amount)
+        users_collection.insert_one({
+            "guild_id": str(guild_id),
+            "user_id": str(user_id),
+            "points": new_pts,
+            "joins": 0,
+            "leaves": 0,
+            "checkins_count": 0,
+            "manual_leaves_count": 0,
+            "last_checkin": "",
+            "last_leave": ""
+        })
+        return new_pts
+    else:
+        current_pts = doc.get("points", 0)
+        new_pts = max(0, current_pts + amount)
+        users_collection.update_one(query, {"$set": {"points": new_pts}})
+        return new_pts
 
 class FunGames(commands.Cog):
     def __init__(self, bot):
@@ -42,12 +61,16 @@ class FunGames(commands.Cog):
     @commands.command(name="تحديد_الألعاب")
     @commands.has_permissions(administrator=True)
     async def set_games_channel(self, ctx):
-        config = load_data(CONFIG_FILE)
+        if not ctx.guild:
+            return
         guild_id = str(ctx.guild.id)
-        if guild_id not in config: config[guild_id] = {}
-        config[guild_id]["games_channel"] = ctx.channel.id
-        save_data(config, CONFIG_FILE)
-        await ctx.send("✅ تم تعيين هذه القناة **للألعاب** بنجاح!")
+        if config_collection is not None:
+            config_collection.update_one(
+                {"guild_id": guild_id},
+                {"$set": {"games_channel": ctx.channel.id}},
+                upsert=True
+            )
+        await ctx.send("✅ تم تعيين هذه القناة **للألعاب** بنجاح وحفظها في قاعدة البيانات!")
 
     # قائمة الألعاب
     @commands.command(name="الالعاب")
@@ -68,7 +91,7 @@ class FunGames(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.author.bot:
+        if message.author.bot or not message.guild:
             return
 
         text = message.content.strip().lower()
@@ -87,9 +110,12 @@ class FunGames(commands.Cog):
         if not matched:
             return
 
-        # فحص قناة الألعاب المخصصة
-        config = load_data(CONFIG_FILE)
-        games_channel_id = config.get(guild_id, {}).get("games_channel")
+        # فحص قناة الألعاب المخصصة من MongoDB
+        games_channel_id = None
+        if config_collection is not None:
+            cfg = config_collection.find_one({"guild_id": guild_id})
+            if cfg:
+                games_channel_id = cfg.get("games_channel")
         
         if games_channel_id and message.channel.id != games_channel_id:
             await message.delete()
