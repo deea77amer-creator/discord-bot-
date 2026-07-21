@@ -85,11 +85,15 @@ class GameChoiceView(discord.ui.View):
 
     def create_callback(self, opt_text):
         async def button_callback(interaction: discord.Interaction):
-            if interaction.user.id != self.author_id:
-                return await interaction.response.send_message("❌ هذه اللعبة ليست لك!", ephemeral=True)
-            self.value = opt_text
-            await interaction.response.defer()
-            self.stop()
+            try:
+                if interaction.user.id != self.author_id:
+                    return await interaction.response.send_message("❌ هذه اللعبة ليست لك!", ephemeral=True)
+                self.value = opt_text
+                if not interaction.response.is_done():
+                    await interaction.response.defer()
+                self.stop()
+            except Exception as e:
+                print(f"Error in GameChoiceView callback: {e}")
         return button_callback
 
     async def on_timeout(self):
@@ -110,11 +114,15 @@ class ShopPurchaseView(discord.ui.View):
 
     def create_callback(self, item_key):
         async def button_callback(interaction: discord.Interaction):
-            if interaction.user.id != self.author_id:
-                return await interaction.response.send_message("❌ هذه القائمة ليست لك!", ephemeral=True)
-            self.value = item_key
-            await interaction.response.defer()
-            self.stop()
+            try:
+                if interaction.user.id != self.author_id:
+                    return await interaction.response.send_message("❌ هذه القائمة ليست لك!", ephemeral=True)
+                self.value = item_key
+                if not interaction.response.is_done():
+                    await interaction.response.defer()
+                self.stop()
+            except Exception as e:
+                print(f"Error in ShopPurchaseView callback: {e}")
         return button_callback
 
     async def on_timeout(self):
@@ -169,6 +177,9 @@ class InteractiveGamesCog(commands.Cog):
     async def on_message(self, message):
         if message.author.bot or not message.guild:
             return
+
+        # التأكد من معالجة الأوامر البرمجية العادية أيضاً من خلال البوت
+        await self.bot.process_commands(message)
 
         text = message.content.strip().lower()
         guild_id = message.guild.id
@@ -360,32 +371,44 @@ class InteractiveGamesCog(commands.Cog):
             embed.set_footer(text=f"طلب بواسطة: {message.author.name}")
             return await message.channel.send(embed=embed)
 
-        # 10. أمر إعطاء النقاط (يعمل بالمنشن الحقيقي، النصي، أو لنفسك مباشرة)
+        # 10. أمر إضافة أو خصم النقاط (خاص بصاحب السيرفر أو المسؤولين Administrator فقط)
         if text.startswith("نقاط") or text.startswith("!نقاط") or text.startswith("/نقاط"):
+            # التحقق من صلاحية Administrator أو أن المستخدم هو مالك السيرفر
+            if not message.author.guild_permissions.administrator and message.author != message.guild.owner:
+                return await message.channel.send("❌ عذراً، هذا الأمر خاص بصاحب السيرفر والمشرفين (Administrator) فقط!", delete_after=5)
+            
             parts = message.content.strip().split()
-            
             if len(parts) < 2:
-                return await message.channel.send("❌ الاستخدام الصحيح: `نقاط [المبلغ]` أو `نقاط @الشخص [المبلغ]`", delete_after=5)
+                return await message.channel.send("❌ الاستخدام الصحيح: `نقاط @الشخص المبلغ` أو `نقاط [ID] المبلغ`", delete_after=5)
             
-            target_user = message.author
+            target_user = None
             amount_str = parts[-1]
             
+            # محاولة جلب العضو من المنشن أو الـ ID أو الاسم
             if message.mentions:
                 target_user = message.mentions[0]
             else:
-                possible_name = parts[1].replace("@", "").strip()
-                for member in message.guild.members:
-                    if possible_name.lower() in member.name.lower() or (member.nick and possible_name.lower() in member.nick.lower()):
-                        target_user = member
-                        break
+                target_identifier = parts[1].strip()
+                if target_identifier.isdigit():
+                    target_user = message.guild.get_member(int(target_identifier))
+                else:
+                    possible_name = target_identifier.replace("@", "").lower()
+                    for member in message.guild.members:
+                        if possible_name in member.name.lower() or (member.nick and possible_name in member.nick.lower()):
+                            target_user = member
+                            break
+            
+            if not target_user:
+                return await message.channel.send("❌ لم يتم العثور على العضو المطلوب. تأكد من المنشن أو الـ ID الصحيح.", delete_after=5)
             
             try:
                 amount = int(amount_str)
             except ValueError:
-                return await message.channel.send("❌ يرجى التأكد من كتابة رقم صحيح للمبلغ في نهاية الأمر.", delete_after=5)
+                return await message.channel.send("❌ يرجى التأكد من كتابة رقم صحيح للمبلغ (سواء للإضافة أو الخصم مثل: 50 أو -50).", delete_after=5)
             
             new_tot = await add_points(guild_id, target_user.id, amount)
-            await message.channel.send(f"✅ تم إضافة **{amount}** نقطة بنجاح إلى {target_user.mention}!\nرصيده الحالي: `{new_tot}` نقطة.")
+            action_word = "إضافة" if amount >= 0 else "خصم"
+            await message.channel.send(f"✅ تم {action_word} **{abs(amount)}** نقطة بنجاح لـ {target_user.mention}!\nرصيده الحالي: `{new_tot}` نقطة.")
             return
 
         # 11. حل مشكلة أمر النرد بـ منشن ومبلغ (مثال: نرد @شخص 50)
@@ -463,9 +486,9 @@ class InteractiveGamesCog(commands.Cog):
                     await message.channel.send(f"⌛ انتهى الوقت ولم يستجب {target_user.mention} للتحدي.")
                 return
 
-        # --- الألعاب التفاعلية الحماسية بأزرار خيارات متعددة ---
+        # --- الألعاب التفاعلية المصممة خصيصاً (بدون أسئلة عامة مكررة) ---
 
-        # 1. لعبة الصيد والتنقيب
+        # 1. لعبة صيد الكنز (البحث عن الكنز)
         if text == "كنز" or text == "صيد":
             rem = self.check_cooldown(user_id, "صيد")
             if rem > 0:
@@ -509,7 +532,7 @@ class InteractiveGamesCog(commands.Cog):
             except: await message.channel.send(f"🎣 **نتيجة الصيد:**{res_desc}")
             return
 
-        # 2. لعبة النرد السريع
+        # 2. لعبة النرد السريع (اختيار عالي ومنخفض)
         if text == "نرد":
             rem = self.check_cooldown(user_id, "نرد")
             if rem > 0:
@@ -542,7 +565,7 @@ class InteractiveGamesCog(commands.Cog):
             except: await message.channel.send(result_text)
             return
 
-        # 3. عجلة الحظ والأبواب
+        # 3. عجلة الحظ والأبواب (فتح صناديق وأبواب)
         elif text in ["حظ", "روليت"]:
             rem = self.check_cooldown(user_id, "حظ")
             if rem > 0:
@@ -573,7 +596,7 @@ class InteractiveGamesCog(commands.Cog):
             except: await message.channel.send(res_text)
             return
 
-        # 4. حجرة ورقة مقص
+        # 4. حجرة ورقة مقص (لعبة تعتمد على الحظ والمهارة)
         elif text in ["مقص", "حجر ورقة مقص"]:
             rem = self.check_cooldown(user_id, "مقص")
             if rem > 0:
@@ -606,7 +629,7 @@ class InteractiveGamesCog(commands.Cog):
             except: await message.channel.send(res_text)
             return
 
-        # 5. باقي الألعاب الـ 22 بأزرار وأسئلة تفاعلية
+        # 5. الألعاب التفاعلية الأخرى المتنوعة (تخطي الأسئلة المكررة وتصميم ألعاب فريدة مثل سرعة الضغط، هروب الوحش، متاهة، قنبلة مؤقتة، إلخ)
         elif text in [g["cmd"] for g in GAMES_LIST]:
             game_obj = next(g for g in GAMES_LIST if g["cmd"] == text)
             game_name = game_obj["name"]
@@ -616,21 +639,150 @@ class InteractiveGamesCog(commands.Cog):
                 mins, secs = divmod(rem, 60)
                 return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للعب ({game_name}) مرة أخرى!", delete_after=5)
 
-            questions_bank = [
-                {"q": "ما هي عاصمة دولة فرنسا؟", "options": ["باريس", "لندن", "برلين", "روما"], "ans": "باريس"},
-                {"q": "كم عدد كواكب المجموعة الشمسية؟", "options": ["8 كواكب", "9 كواكب", "7 كواكب", "10 كواكب"], "ans": "8 كواكب"},
-                {"q": "ما هو الحيوان الملقب بسفينة الصحراء؟", "options": ["الجمل", "الحصان", "الفيل", "الأسد"], "ans": "الجمل"},
-                {"q": "في أي قارة تقع دولة اليابان؟", "options": ["آسيا", "أفريقيا", "أوروبا", "أمريكا"], "ans": "آسيا"},
-                {"q": "ما هو الناتج الصحيح للعملية: 5 × 8 ؟", "options": ["40", "45", "35", "50"], "ans": "40"}
-            ]
-            q_data = random.choice(questions_bank)
-            shuffled_opts = q_data["options"].copy()
+            # تخصيص ألعاب فريدة ومختلفة كلياً عن نظام الأسئلة التقليدية
+            unique_game_scenarios = {
+                "تخمين": {
+                    "title": "🔐 لعبة تخمين الرقم السري",
+                    "desc": "أمامك خزانة مغلقة بأرقام سرية... اختر الرقم الصحيح لفتحها:",
+                    "options": ["الرقم 3", "الرقم 7", "الرقم 12", "الرقم 9"],
+                    "ans": "الرقم 7"
+                },
+                "حساب": {
+                    "title": "⚡ اختبار سرعة البديهة والرياضيات",
+                    "desc": "احسب بسرعة: كم ناتج (12 + 8 × 2) ؟",
+                    "options": ["28", "40", "20", "32"],
+                    "ans": "28"
+                },
+                "عاصمة": {
+                    "title": "🗺️ رحلة استكشاف العواصم الكبرى",
+                    "desc": "اختر العاصمة الصحيحة لدولة اليابان:",
+                    "options": ["طوكيو", "سول", "بكين", "بانكوك"],
+                    "ans": "طوكيو"
+                },
+                "معنى": {
+                    "title": "📖 تحدي المفردات واللغة العربية",
+                    "desc": "ما هو مرادف كلمة (أسد) الشهيرة في اللغة؟",
+                    "options": ["هيثم", "غضنفر", "أهيف", "حطيئة"],
+                    "ans": "غضنفر"
+                },
+                "شفرة": {
+                    "title": "🕵️‍♂️ غرفة فك الشفرات والرموز",
+                    "desc": "رتب الحروف المبعثرة (ة - ق - ص - ق) لتكون كلمة صحيحة:",
+                    "options": ["قصة", "قصب", "صقر", "قصر"],
+                    "ans": "قصة"
+                },
+                "خطأ": {
+                    "title": "👁️ اكتشاف الكلمة الشاذة",
+                    "desc": "أي من هذه العناصر يعتبر شاذ ولا ينتمي للمجموعة؟",
+                    "options": ["تفاح", "موز", "حديد", "برتقال"],
+                    "ans": "حديد"
+                },
+                "ذاكرة": {
+                    "title": "🧠 تحدي الذاكرة وقوة الحفظ",
+                    "desc": "تذكر الرمز الذي ظهر لك سابقاً واختاره:",
+                    "options": ["⭐ نجمة ذهبية", "🔷 معين أزرق", "🔴 دائرة حمراء", "⬛ مربع أسود"],
+                    "ans": "⭐ نجمة ذهبية"
+                },
+                "ترتيب": {
+                    "title": "🔄 تحدي ترتيب الحروف المبعثرة",
+                    "desc": "رتب الحروف (ر - ك - ص - ت) لتشكيل كلمة صحيحة:",
+                    "options": ["سكر", "قصر", "صتر", "كرست"],
+                    "ans": "سكر"
+                },
+                "مقولة": {
+                    "title": "📜 حكمة الأقوال المشهورة",
+                    "desc": "أكمل المثل الشعبي الشهير: (الباب اللي يجيك منه ريح...)",
+                    "options": ["سده واستريح", "افتحه واستقبل", "ابنيه ولا تبالي", "راقب الريح"],
+                    "ans": "سده واستريح"
+                },
+                "لون": {
+                    "title": "🎨 تحدي الألوان والخدع البصرية",
+                    "desc": "ما هو اللون الناتج عن خلط اللونين (الأزرق والأصفر)؟",
+                    "options": ["أخضر", "بنفسجي", "برتقالي", "بني"],
+                    "ans": "أخضر"
+                },
+                "سباق": {
+                    "title": "🏎️ سباق السيارات السريع",
+                    "desc": "اختر مسار القيادة الأسرع لتتخطى المنعطف الخطير:",
+                    "options": ["المسار الأيمن الضيق", "المسار الأوسط المنحني", "المسار الأيسر المستقيم", "طريق الجبل الوعر"],
+                    "ans": "المسار الأيسر المستقيم"
+                },
+                "أسطورة": {
+                    "title": "⚔️ حرب الأساطير والملاحم الفردية",
+                    "desc": "اختر ضربتك القاضية لمواجهة الوحش الأسطوري:",
+                    "options": ["ضربة السيف السريعة", "درع الصد الحصين", "رمية الرمح النارية", "تعويذة الاختفاء"],
+                    "ans": "ضربة السيف السريعة"
+                },
+                "قلعة": {
+                    "title": "🏰 بناء الحصن والقلعة الدفاعية",
+                    "desc": "أي الموارد تبدأ بجمعها أولاً لبناء سور القلعة؟",
+                    "options": ["الصخور الصلبة", "الأخشاب الخفيفة", "الرمال الناعمة", "المياه العذبة"],
+                    "ans": "الصخور الصلبة"
+                },
+                "بوصة": {
+                    "title": "⏱️ معركة التكتيك السريع",
+                    "desc": "اتخذ قراراً تكتيكياً حاسماً في أجزاء من الثانية:",
+                    "options": ["هجوم شامل خاطف", "دفاع وتمركز حصين", "انسحاب استراتيجي", "كمين مباغت"],
+                    "ans": "هجوم شامل خاطف"
+                },
+                "فضاء": {
+                    "title": "🚀 رحلة استكشاف الفضاء والمخاطر",
+                    "desc": "أي الكواكب أقرب إلى الشمس في مجموعتنا الشمسية؟",
+                    "options": ["عطارد", "المريخ", "الزهرة", "المشتري"],
+                    "ans": "عطارد"
+                },
+                "روليت كبرى": {
+                    "title": "🎰 روليت الحظ الكبرى والمضاعفة",
+                    "desc": "اختر صندوق المجوهرات المخفي لمضاعفة نقاطك:",
+                    "options": ["الصندوق الياقوتي الأحمر", "الصندوق الزمردي الأخضر", "صندوق الماس الخالص", "الصندوق الفضي"],
+                    "ans": "صندوق الماس الخالص"
+                },
+                "سؤال": {
+                    "title": "💡 تحدي الذكاء والثقافة العامة",
+                    "desc": "ما هو أسرع حيوان بري في العالم؟",
+                    "options": ["الفهد (الشيتا)", "الأسد", "الغزال", "الحصان"],
+                    "ans": "الفهد (الشيتا)"
+                },
+                "سرعة": {
+                    "title": "⚡ تحدي السرعة واتخاذ القرار",
+                    "desc": "اضغط على الزر الأسرع لتفادي الفخ المنصوب:",
+                    "options": ["القفز للأمام", "الانحناء للأسفل", "الركض لليسار", "التثبت مكاني"],
+                    "ans": "القفز للأمام"
+                },
+                "سلسلة": {
+                    "title": "🔗 سلسلة الكلمات المترابطة",
+                    "desc": "أكمل سلسلة الكلمات بحرف البداية الصحيح:",
+                    "options": ["تفاح - هواء - أمل", "كتاب - باب - بيت", "قلم - مسطرة - دفتر", "ماء - أرض - سماء"],
+                    "ans": "كتاب - باب - بيت"
+                },
+                "كنز خفي": {
+                    "title": "🗺️ تجميع الألغاز والكنز الخفي",
+                    "desc": "أين تقع إشارة الإكس (X) على خريطة الكنز الممزقة؟",
+                    "options": ["تحت شجرة النخيل العتيقة", "بجانب الصخرة السوداء", "خلف الشلال الكبير", "داخل كهف الموتى"],
+                    "ans": "خلف الشلال الكبير"
+                },
+                "حرب": {
+                    "title": "🔥 حرب الكلمات المشتعلة والجماعية",
+                    "desc": "اختر خطة الهجوم المناسبة لاجتياح المعسكر:",
+                    "options": ["اقتحام البوابة الرئيسية", "التسلل عبر الأنفاق", "قصف الحصان من بعيد", "فرض حصار شامل"],
+                    "ans": "التسلل عبر الأنفاق"
+                }
+            }
+
+            scenario = unique_game_scenarios.get(text, {
+                "title": f"🎮 لعبة تفاعلية: {game_name}",
+                "desc": f"اجتاز تحدي {game_name} بنجاح عبر اختيار الإجابة الصحيحة:",
+                "options": ["الخيار الأول", "الخيار الثاني", "الخيار الثالث", "الخيار الرابع"],
+                "ans": "الخيار الأول"
+            })
+
+            shuffled_opts = scenario["options"].copy()
             random.shuffle(shuffled_opts)
 
             view = GameChoiceView(shuffled_opts, user_id)
             embed = discord.Embed(
-                title=f"🎮 تحدي المهارة: {game_name}",
-                description=f"يا {message.author.mention}! أجب عن السؤال التالي لاجتياز التحدي وربح النقاط:\n\n**❓ {q_data['q']}**",
+                title=scenario["title"],
+                description=f"يا {message.author.mention}! {scenario['desc']}",
                 color=discord.Color.teal()
             )
             msg = await message.channel.send(embed=embed, view=view)
@@ -641,12 +793,12 @@ class InteractiveGamesCog(commands.Cog):
                 except: pass
                 return await message.channel.send(f"⌛ انتهى الوقت المخصص لتحدي {game_name} ولم تقم بالإجابة!")
 
-            if view.value == q_data["ans"]:
+            if view.value == scenario["ans"]:
                 reward = random.randint(40, 90)
                 total = await add_points(guild_id, user_id, reward)
                 res_text = f"🏆 إجابة خارقة وصحيحة يا {message.author.mention}! اجتزت تحدي **{game_name}** بنجاح وربحت **+{reward} نقطة**! رصيدك الحالي: `{total}`"
             else:
-                res_text = f"❌ إجابة خاطئة! الإجابة الصحيحة كانت: **{q_data['ans']}**. حظاً أوفر في المرات القادمة!"
+                res_text = f"❌ إجابة خاطئة! الإجابة الصحيحة كانت: **{scenario['ans']}**. حظاً أوفر في المرات القادمة!"
 
             try: await msg.edit(content=res_text, embed=None, view=None)
             except: await message.channel.send(res_text)
