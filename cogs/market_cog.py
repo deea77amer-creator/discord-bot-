@@ -21,15 +21,15 @@ if MONGO_URL:
 
 # قاموس لتتبع وقت آخر تداول واستثمار وباقي الأوامر لكل مستخدم (Cooldown: دقيقتين)
 market_cooldowns = {}
-# أسعار الأصول المتغيرة كل 3 دقائق
+
+# قائمة الأسعار الجديدة والمستقلة تماماً (أصناف جديدة كلياً)
 DYNAMIC_ASSETS = [
-    {"name": "سيارات", "emoji": "🚗", "price": 116560},
-    {"name": "أسهم", "emoji": "📊", "price": 29861},
-    {"name": "أراضي", "emoji": "🏢", "price": 343661},
-    {"name": "قطارات", "emoji": "🚆", "price": 868012},
-    {"name": "هواتف", "emoji": "📱", "price": 57134},
-    {"name": "طائرات", "emoji": "✈️", "price": 161584},
-    {"name": "ملاعب", "emoji": "🏟️", "price": 12614485}
+    {"name": "سيف الأساطير", "emoji": "⚔️", "price": 1500, "desc": "سيف حربي أسطوري يزيد هيبتك"},
+    {"name": "درع التيتانيوم", "emoji": "🛡️", "price": 2800, "desc": "درع حصين يصد أقوى الضربات"},
+    {"name": "جرعة الإكسير الذهبي", "emoji": "🧪", "price": 850, "desc": "جرعة نادرة تمنحك طاقة مضاعفة"},
+    {"name": "خنجر الظل الخفي", "emoji": "🗡️", "price": 1200, "desc": "سلاح سريع للضربات المباغتة"},
+    {"name": "تفاحة الطاقة السحرية", "emoji": "🍎", "price": 300, "desc": "تنعش طاقتك وتمنحك حيوية فورية"},
+    {"name": "عباءة التخفي الكبرى", "emoji": "🧥", "price": 4500, "desc": "تعطيك حماية مطلقة وهيبة ملكية"}
 ]
 last_price_update = datetime.now()
 
@@ -37,7 +37,7 @@ def update_dynamic_prices():
     global last_price_update
     if datetime.now() - last_price_update > timedelta(minutes=3):
         for asset in DYNAMIC_ASSETS:
-            change_percent = random.uniform(-0.25, 0.30)
+            change_percent = random.uniform(-0.15, 0.20)
             asset["price"] = max(100, int(asset["price"] * (1 + change_percent)))
         last_price_update = datetime.now()
 
@@ -112,10 +112,10 @@ class AssetSelect(discord.ui.Select):
     def __init__(self, assets):
         update_dynamic_prices()
         options = [
-            discord.SelectOption(label=f"{a['name']}", description=f"السعر: {a['price']} نقطة", emoji=a["emoji"])
+            discord.SelectOption(label=f"{a['name']}", description=f"السعر: {a['price']} نقطة | {a['desc']}", emoji=a["emoji"])
             for a in assets
         ]
-        super().__init__(placeholder="اختر المنتج...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="اختر المنتج من المتجر...", min_values=1, max_values=1, options=options)
         self.selected_value = None
 
     async def callback(self, interaction: discord.Interaction):
@@ -185,7 +185,7 @@ class MarketCog(commands.Cog):
         if channel_id != self.target_channel_id:
             return
 
-        # 0. أمر اعطاء النقاط (خاص بمالك السيرفر لتجنب تداخل أمر نقاط مع الاستعلام العادي)
+        # 0. أمر اعطاء النقاط
         if text.startswith("اعطاء") or text.startswith("!اعطاء") or text.startswith("/اعطاء"):
             if message.author.id != message.guild.owner_id:
                 return await message.channel.send("❌ هذا الأمر مخصص لمالك السيرفر فقط!", delete_after=5)
@@ -209,21 +209,21 @@ class MarketCog(commands.Cog):
             pts = get_user_points(guild_id, target.id)
             return await message.channel.send(f"👤 العضو: {target.mention}\n💰 رصيدك الحالي: `{pts}` نقطة")
 
-        # 2. نظام الاسعار (عرض قائمة الأصول الفعلية والترندات بدقة)
-        if text.startswith("الاسعار") or text.startswith("!الاسعار") or text.startswith("أسعار"):
+        # 2. نظام الاسعار (عرض قائمة المنتجات والأصناف الجديدة مع الوصف والسعر)
+        if text.startswith("اسعار") or text.startswith("!اسعار") or text.startswith("أسعار"):
             update_dynamic_prices()
             rem_seconds = 180 - int((datetime.now() - last_price_update).total_seconds())
             mins, secs = divmod(max(0, rem_seconds), 60)
             
-            desc = f"⏰ سيتم تحديث الاسعار بعد : `{mins:02d}:{secs:02d}`\n\n"
+            desc = f"⏰ سيتم تحديث الأسعار بعد : `{mins:02d}:{secs:02d}`\n\n"
             for asset in DYNAMIC_ASSETS:
                 trend = random.choice(["📈 صاعد", "📉 هابط"])
-                desc += f"{asset['emoji']} **{asset['name']}** ⟵ `{asset['price']:,}` نقطة ({trend})\n"
+                desc += f"{asset['emoji']} **{asset['name']}** ⟵ `{asset['price']:,}` نقطة ({trend})\n   └ *{asset['desc']}*\n\n"
             
-            embed = discord.Embed(title="📊 قائمة الأسعار والأصول المتاحة", description=desc, color=discord.Color.dark_theme())
+            embed = discord.Embed(title="🛒 قائمة أسعار المتجر والمقتنيات الأسطورية", description=desc, color=discord.Color.dark_theme())
             return await message.channel.send(embed=embed)
 
-        # 3. نظام الوقت (عرض الأوقات الفعلية بناءً على الأوامر المستخدمة حقاً)
+        # 3. نظام الوقت
         if text.startswith("وقت") or text.startswith("!وقت"):
             commands_list = ["استثمار", "تداول", "شراء", "بيع"]
             
@@ -240,14 +240,14 @@ class MarketCog(commands.Cog):
             embed = discord.Embed(title="⏳ حالة الأوامر والوقت (Cooldowns)", description=desc, color=discord.Color.blurple())
             return await message.channel.send(embed=embed)
 
-        # 4. نظام الشراء (يعرض قائمة الأصول الحقيقية الموجودة في أمر أسعار تماماً مع حفظ النقاط وتحديثها بقاعدة البيانات)
+        # 4. نظام الشراء التفاعلي بالأزرار (مرتبط بقائمة الأسعار الجديدة والكمية)
         if text.startswith("شراء") or text.startswith("!شراء"):
             update_dynamic_prices()
             parts = message.content.strip().split()
             count = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
 
             view = AssetView(DYNAMIC_ASSETS)
-            embed = discord.Embed(title="🛒 متجر الشراء", description="اختر المنتج الذي تريد شراءه من القائمة أدناه (نفس أسعار السوق):", color=discord.Color.blue())
+            embed = discord.Embed(title="🛒 متجر الشراء التفاعلي", description=f"الكمية المحددة: **{count}**\nاختر المنتج الذي تريد شراءه من القائمة أدناه:", color=discord.Color.blue())
             msg = await message.channel.send(embed=embed, view=view)
             await view.wait()
 
@@ -265,7 +265,7 @@ class MarketCog(commands.Cog):
             current_pts = get_user_points(guild_id, user_id)
 
             if current_pts < total_cost:
-                return await message.channel.send(f"❌ نقاطك غير كافية لشراء هذا المنتج! رصيدك: `{current_pts}` | التكلفة المطلوبة: `{total_cost}`", delete_after=5)
+                return await message.channel.send(f"❌ نقاطك غير كافية لشراء هذا المنتج! رصيدك: `{current_pts}` | التكلفة المطلوبة: `{total_cost:,}`", delete_after=5)
 
             new_total = add_points(guild_id, user_id, -total_cost)
             success_msg = f"🎉 مبروك يا {message.author.mention}! اشتريت `{count}` من `{chosen_asset_name}` بنجاح مقابل `{total_cost:,}` نقطة!\n💼 رصيدك المتبقي: `{new_total:,}` نقطة."
@@ -273,14 +273,14 @@ class MarketCog(commands.Cog):
             except: await message.channel.send(success_msg)
             return
 
-        # 5. نظام البيع (بيع الأصول الحقيقية واسترداد النقاط في قاعدة البيانات دون تصفير)
+        # 5. نظام البيع التفاعلي بالأزرار (مرتبط بقائمة الأسعار الجديدة والكمية)
         if text.startswith("بيع") or text.startswith("!بيع"):
             update_dynamic_prices()
             parts = message.content.strip().split()
             count = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
 
             view = AssetView(DYNAMIC_ASSETS)
-            embed = discord.Embed(title="💰 سوق البيع", description="اختر المنتج المراد بيعه من القائمة أدناه:", color=discord.Color.orange())
+            embed = discord.Embed(title="💰 سوق البيع التفاعلي", description=f"الكمية المحددة: **{count}**\nاختر المنتج المراد بيعه من القائمة أدناه (يتم استرداد 80% من القيمة):", color=discord.Color.orange())
             msg = await message.channel.send(embed=embed, view=view)
             await view.wait()
 
@@ -329,7 +329,7 @@ class MarketCog(commands.Cog):
             
             return await message.channel.send(f"✨ تم تحويل `{amount:,}` نقطة بنجاح إلى العضو {target_user.mention}!")
 
-        # 7. نظام التداول (يدعم كامل أو نص أو رقم مع حفظ دائم في قاعدة البيانات)
+        # 7. نظام التداول
         if text.startswith("تداول") or text.startswith("!تداول"):
             parts = message.content.strip().split()
             current_pts = get_user_points(guild_id, user_id)
@@ -381,7 +381,7 @@ class MarketCog(commands.Cog):
             except: await message.channel.send(embed=res_embed)
             return
 
-        # 8. نظام الاستثمار (يدعم كامل أو نص أو رقم مع حفظ دائم في قاعدة البيانات)
+        # 8. نظام الاستثمار
         if text.startswith("استثمار") or text.startswith("!استثمار"):
             parts = message.content.strip().split()
             current_pts = get_user_points(guild_id, user_id)
