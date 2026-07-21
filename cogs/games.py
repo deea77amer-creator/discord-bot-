@@ -196,6 +196,7 @@ class InteractiveGamesCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.target_channel_id = 1528588181371490344
+        self.processed_messages = set()
 
     def check_cooldown(self, user_id, game_key):
         now = datetime.now()
@@ -212,6 +213,12 @@ class InteractiveGamesCog(commands.Cog):
     async def on_message(self, message):
         if message.author.bot or not message.guild:
             return
+
+        if message.id in self.processed_messages:
+            return
+        self.processed_messages.add(message.id)
+        if len(self.processed_messages) > 1000:
+            self.processed_messages.pop()
 
         text = message.content.strip().lower()
         guild_id = message.guild.id
@@ -244,6 +251,7 @@ class InteractiveGamesCog(commands.Cog):
                       "• `تحويل @الشخص المبلغ` — لتحويل نقاط لعضو آخر.\n"
                       "• `توب` — لعرض قائمة أفضل 10 لاعبين في السيرفر.\n"
                       "• `ممتلكات` أو `حقيبتي` — لعرض محتويات حقيبتك.\n"
+                      "• `نقاط @الشخص المبلغ` — (خاص بصاحب السيرفر) لإضافة أو خصم النقاط.\n"
                       "• *ملاحظة:* يمكنك كتابة أي لعبة ثم منشن لصديق (مثال: `نرد @فلان`) لدعوته لتحدي ثنائي بأزرار قبول ورفض!",
                 inline=False
             )
@@ -430,8 +438,8 @@ class InteractiveGamesCog(commands.Cog):
 
         # 10. أمر إعطاء النقاط الخاص بصاحب السيرفر
         if first_word == "نقاط":
-            if not message.author.guild_permissions.administrator and message.author != message.guild.owner:
-                return await message.channel.send("❌ عذراً، هذا الأمر خاص بصاحب السيرفر والمشرفين (Administrator) فقط!", delete_after=5)
+            if message.author != message.guild.owner:
+                return await message.channel.send("❌ عذراً، هذا الأمر خاص بصاحب السيرفر فقط!", delete_after=5)
             
             if len(parts) < 3 or not message.mentions:
                 return await message.channel.send("❌ الاستخدام الصحيح لصاحب السيرفر: `نقاط @الشخص المبلغ`", delete_after=5)
