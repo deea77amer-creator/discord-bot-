@@ -5,6 +5,9 @@ from discord.ext import commands
 from flask import Flask
 from threading import Thread
 
+# --- استدعاء دوال ملف القاعدة الذي أنشأته ---
+from database import setup_database, add_points, get_points
+
 # --- إعداد سيرفر الـ Flask الوهمي لمنع Port Timeout ---
 app = Flask('')
 
@@ -47,6 +50,8 @@ class MyBot(commands.Bot):
             print(f"فشل تحميل ملف games: {e}")
 
     async def on_ready(self):
+        # --- تفعيل قاعدة البيانات وتجهيز ملف الحفظ أول ما يشتغل البوت ---
+        setup_database()
         print(f"البوت جاهز ومتصل بقاعدة البيانات المحلية باسم: {self.user}")
 
 bot = MyBot()
@@ -210,7 +215,7 @@ async def on_message(message):
         data = get_user_data(guild_id, user_id)
         await message.channel.send(f"💰 رصيدك الحالي يا {message.author.mention}: **{data['points']}** نقطة.")
 
-    elif text_lower in ["توب", "!top", "top"]:
+    elif text_lower in ["tوب", "!top", "top"]:
         if config.get("top_channel") and message.channel.id != config["top_channel"]:
             await message.delete()
             return
