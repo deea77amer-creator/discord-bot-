@@ -157,7 +157,7 @@ class MarketCog(commands.Cog):
         if channel_id != self.target_channel_id:
             return
 
-        # 3. نظام شراء الممتلكات بالعدد (مثال: شراء 18 فيلا فاخرة أو شراء عشوائي)
+        # 3. نظام شراء الممتلكات بالعدد
         if text.startswith("شراء") or text.startswith("!شراء"):
             parts = message.content.strip().split()
             if len(parts) < 3 or not parts[1].isdigit():
@@ -184,10 +184,8 @@ class MarketCog(commands.Cog):
                 return
 
             chosen_text = view.select.selected_value
-            # استخراج اسم الأصل فقط بدون السعر
             chosen_asset = chosen_text.split(" (السعر:")[0]
             
-            # إيجاد سعر الأصل الواحد
             asset_obj = next((a for a in ASSETS_LIST if a["name"] in chosen_asset), None)
             if not asset_obj:
                 return await message.channel.send("❌ حدث خطأ في اختيار الأصل.", delete_after=5)
@@ -201,7 +199,7 @@ class MarketCog(commands.Cog):
             new_total = add_points(guild_id, user_id, -total_cost)
             success_embed = discord.Embed(
                 title="✅ تم الشراء بنجاح",
-                description=ف f"🛍️ لقد قمت بشراء **{count}** من ({chosen_asset}) بنجاح!\n💰 التكلفة الإجمالية: `-{total_cost}` نقطة\n💼 رصيدك الحالي: `{new_total}` نقطة",
+                description=f"🛍️ لقد قمت بشراء **{count}** من ({chosen_asset}) بنجاح!\n💰 التكلفة الإجمالية: `-{total_cost}` نقطة\n💼 رصيدك الحالي: `{new_total}` نقطة",
                 color=discord.Color.green()
             )
             try:
@@ -210,7 +208,7 @@ class MarketCog(commands.Cog):
                 await message.channel.send(embed=success_embed)
             return
 
-        # 4. نظام تحويل الممتلكات (مثال: تحويل ممتلكات @الشخص العدد)
+        # 4. نظام تحويل الممتلكات
         if text.startswith("تحويل ممتلكات") or text.startswith("!تحويل ممتلكات"):
             if not message.mentions:
                 return await message.channel.send("❌ يرجى منشن الشخص المراد التحويل له (مثال: `تحويل ممتلكات @user 5`)", delete_after=5)
@@ -220,7 +218,6 @@ class MarketCog(commands.Cog):
                 return await message.channel.send("❌ لا يمكنك تحويل ممتلكات لنفسك!", delete_after=5)
 
             parts = message.content.strip().split()
-            # البحث عن الرقم الأخير في الأمر ليمثل العدد
             count = 0
             for p in reversed(parts):
                 if p.isdigit():
