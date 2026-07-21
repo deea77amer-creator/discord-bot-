@@ -37,7 +37,7 @@ async def setup_commands(bot):
             
         embed = discord.Embed(title="🛒 متجر البوت", description="اختر الغرض الذي تريد شراءه من الأزرار بالأسفل:", color=discord.Color.green())
         for item in items:
-            embed.add_field(name=item.get("name", "غرض"), value=جملة الوصف السعر: {item.get('price', 0)} نقطة, inline=False)
+            embed.add_field(name=item.get("name", "غرض"), value=f"السعر: {item.get('price', 0)} نقطة", inline=False)
             
         view = ShopView(items)
         await ctx.send(embed=embed, view=view)
