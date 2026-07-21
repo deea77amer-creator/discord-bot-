@@ -5,9 +5,6 @@ from discord.ext import commands
 from flask import Flask
 from threading import Thread
 
-# --- استدعاء دوال ملف القاعدة الذي أنشأته ---
-from database import setup_database, add_points, get_points
-
 # --- إعداد سيرفر الـ Flask الوهمي لمنع Port Timeout ---
 app = Flask('')
 
@@ -50,8 +47,8 @@ class MyBot(commands.Bot):
             print(f"فشل تحميل ملف games: {e}")
 
     async def on_ready(self):
-        # --- تفعيل قاعدة البيانات وتجهيز ملف الحفظ أول ما يشتغل البوت ---
-        setup_database()
+        # --- التأكد من تهيئة قاعدة البيانات عند بدء التشغيل دون حذف البيانات القديمة ---
+        init_db()
         print(f"البوت جاهز ومتصل بقاعدة البيانات المحلية باسم: {self.user}")
 
 bot = MyBot()
@@ -96,7 +93,7 @@ def get_user_data(guild_id, user_id):
     cursor.execute("SELECT joins, leaves, points, checkins_count, manual_leaves_count, last_checkin, last_leave FROM users WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
     row = cursor.fetchone()
     if not row:
-        cursor.execute("INSERT OR IGNORE INTO users (guild_id, user_id) VALUES (?, ?)", (str(guild_id), str(user_id)))
+        cursor.execute("INSERT OR IGNORE INTO users (guild_id, user_id, joins, leaves, points, checkins_count, manual_leaves_count, last_checkin, last_leave) VALUES (?, ?, 0, 0, 0, 0, 0, '', '')", (str(guild_id), str(user_id)))
         conn.commit()
         data = {"joins": 0, "leaves": 0, "points": 0, "checkins_count": 0, "manual_leaves_count": 0, "last_checkin": "", "last_leave": ""}
     else:
