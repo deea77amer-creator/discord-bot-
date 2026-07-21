@@ -8,8 +8,27 @@ from datetime import datetime, timedelta
 
 DB_FILE = "database.db"
 
-# قاموس لتتبع وقت آخر تداول واستثمار لكل مستخدم (Cooldown: دقيقتين عند النجاح فقط)
+# قاموس لتتبع وقت آخر تداول واستثمار وباقي الأوامر لكل مستخدم (Cooldown: دقيقتين)
 market_cooldowns = {}
+# أسعار الأصول المتغيرة كل 3 دقائق
+DYNAMIC_ASSETS = [
+    {"name": "سيارات", "emoji": "🚗", "price": 116560},
+    {"name": "أسهم", "emoji": "📊", "price": 29861},
+    {"name": "أراضي", "emoji": "🏢", "price": 343661},
+    {"name": "قطارات", "emoji": "🚆", "price": 868012},
+    {"name": "هواتف", "emoji": "📱", "price": 57134},
+    {"name": "طائرات", "emoji": "✈️", "price": 161584},
+    {"name": "ملاعب", "emoji": "🏟️", "price": 12614485}
+]
+last_price_update = datetime.now()
+
+def update_dynamic_prices():
+    global last_price_update
+    if datetime.now() - last_price_update > timedelta(minutes=3):
+        for asset in DYNAMIC_ASSETS:
+            change_percent = random.uniform(-0.25, 0.30)
+            asset["price"] = max(100, int(asset["price"] * (1 + change_percent)))
+        last_price_update = datetime.now()
 
 def get_user_points(guild_id, user_id):
     if not os.path.exists(DB_FILE):
@@ -37,7 +56,6 @@ def add_points(guild_id, user_id, amount):
     conn.close()
     return res
 
-# دول التداول (أجنبية) بأسماء حقيقية وواضحة
 TRADING_COUNTRIES = [
     {"name": "أمريكا", "emoji": "🇺🇸", "desc": "سوق وول ستريت"},
     {"name": "بريطانيا", "emoji": "🇬🇧", "desc": "بورصة لندن"},
@@ -47,7 +65,6 @@ TRADING_COUNTRIES = [
     {"name": "إيطاليا", "emoji": "🇮🇹", "desc": "البورصة الإيطالية"}
 ]
 
-# دول الاستثمار (عربية) بأسماء حقيقية وواضحة
 INVESTMENT_COUNTRIES = [
     {"name": "السعودية", "emoji": "🇸🇦", "desc": "السوق السعودي (تداول)"},
     {"name": "الإمارات", "emoji": "🇦🇪", "desc": "دبي المالي"},
@@ -55,15 +72,6 @@ INVESTMENT_COUNTRIES = [
     {"name": "الكويت", "emoji": "🇰🇼", "desc": "البورصة الكويتية"},
     {"name": "قطر", "emoji": "🇶🇦", "desc": "بورصة قطر"},
     {"name": "المغرب", "emoji": "🇲🇦", "desc": "سوق الدار البيضاء"}
-]
-
-# قائمة الأصول والممتلكات العشوائية للشراء والبيع والتحويل بالعدد
-ASSETS_LIST = [
-    {"name": "فيلا فاخرة", "emoji": "🏰", "price": 5000},
-    {"name": "عمارة تجارية", "emoji": "🏢", "price": 12000},
-    {"name": "سيارة فارهة", "emoji": "🏎️", "price": 2500},
-    {"name": "شركة تقنية", "emoji": "💻", "price": 20000},
-    {"name": "متجر إلكتروني", "emoji": "🛒", "price": 1000}
 ]
 
 class CountrySelect(discord.ui.Select):
@@ -82,11 +90,12 @@ class CountrySelect(discord.ui.Select):
 
 class AssetSelect(discord.ui.Select):
     def __init__(self, assets):
+        update_dynamic_prices()
         options = [
-            discord.SelectOption(label=f"{a['name']} (السعر: {a['price']} نقطة)", description=f"شراء أو تحويل بالعدد", emoji=a["emoji"])
+            discord.SelectOption(label=f"{a['name']}", description=f"السعر: {a['price']} نقطة", emoji=a["emoji"])
             for a in assets
         ]
-        super().__init__(placeholder="اختر الممتلك أو الأصل...", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="اختر المنتج...", min_values=1, max_values=1, options=options)
         self.selected_value = None
 
     async def callback(self, interaction: discord.Interaction):
@@ -153,151 +162,166 @@ class MarketCog(commands.Cog):
         user_id = message.author.id
         channel_id = message.channel.id
 
-        # التحقق من أن الأوامر تعمل فقط في القناة المحددة حصراً
         if channel_id != self.target_channel_id:
             return
 
-        # 3. نظام شراء الممتلكات بالعدد
+        # 1. نظام النقاط ورصيد المستخدم أو منشن شخص
+        if text.startswith("نقاط") or text.startswith("!نقاط") or text.startswith("البنك") or text.startswith("رصيدي"):
+            target = message.mentions[0] if message.mentions else message.author
+            pts = get_user_points(guild_id, target.id)
+            return await message.channel.send(f"👤 العضو: {target.mention}\n💰 رصيدك الحالي: `{pts}` نقطة")
+
+        # 2. نظام الاسعار (عرض أسعار الأصول المتغيرة كل 3 دقائق)
+        if text.startswith("الاسعار") or text.startswith("!الاسعار") or text.startswith("أسعار"):
+            update_dynamic_prices()
+            rem_seconds = 180 - int((datetime.now() - last_price_update).total_seconds())
+            mins, secs = divmod(max(0, rem_seconds), 60)
+            
+            desc = f" سيتم تحديث الاسعار بعد : `{mins:02d}:{secs:02d}`\n\n"
+            for asset in DYNAMIC_ASSETS:
+                trend = random.choice(["📈", "📉"])
+                desc += f"{asset['emoji']} **{asset['name']}** :\n{trend} `{asset['price']:,} $`\n\n"
+            
+            embed = discord.Embed(title="📊 الأسعار الحالية", description=desc, color=discord.Color.dark_theme())
+            return await message.channel.send(embed=embed)
+
+        # 3. نظام الوقت (معرفة حالة الكولدون للأوامر)
+        if text.startswith("وقت") or text.startswith("!وقت"):
+            commands_list = ["زر", "تحدي", "كراش", "نرد", "ايموجي", "الوان", "استثمار", "أرقام", "لعبة", "سل وت", "تداول", "اكس-او", "خمن", "فواكه", "اختباء", "مخاطرة", "نمط", "شراء", "بيع", "بخشيش", "الراتب", "نهب"]
+            
+            desc = ""
+            for cmd in commands_list:
+                act_key = "investment" if cmd == "استثمار" else ("trading" if cmd == "تداول" else cmd)
+                rem = self.check_cooldown(user_id, act_key)
+                if rem > 0:
+                    mins, secs = divmod(rem, 60)
+                    desc += f"{cmd} 🔴 `{mins}:{secs:02d}`\n"
+                else:
+                    desc += f"{cmd} 🟢\n"
+            
+            embed = discord.Embed(title="⏳ حالة الأوامر (Cooldown)", description=desc, color=discord.Color.blurple())
+            return await message.channel.send(embed=embed)
+
+        # 4. نظام الشراء
         if text.startswith("شراء") or text.startswith("!شراء"):
             parts = message.content.strip().split()
-            if len(parts) < 3 or not parts[1].isdigit():
-                return await message.channel.send("❌ الاستخدام الصحيح: `شراء [العدد]` (مثال: `شراء 18`)", delete_after=5)
-            
-            count = int(parts[1])
-            if count <= 0:
-                return await message.channel.send("❌ يرجى إدخال عدد صحيح أكبر من الصفر.", delete_after=5)
+            count = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
 
-            view = AssetView(ASSETS_LIST)
-            embed = discord.Embed(
-                title="🛒 متجر الممتلكات والأصول",
-                description=f"العدد المطلوب شراؤه: `{count}`\nاختر الأصل أو الممتلك من القائمة أدناه:",
-                color=discord.Color.blue()
-            )
+            view = AssetView(DYNAMIC_ASSETS)
+            embed = discord.Embed(title="🛒 الشراء", description="اختر من القائمة بالأسفل", color=discord.Color.blue())
             msg = await message.channel.send(embed=embed, view=view)
             await view.wait()
 
             if view.cancelled or not view.select.selected_value:
-                try:
-                    await msg.delete()
-                except:
-                    pass
+                try: await msg.delete()
+                except: pass
                 return
 
-            chosen_text = view.select.selected_value
-            chosen_asset = chosen_text.split(" (السعر:")[0]
-            
-            asset_obj = next((a for a in ASSETS_LIST if a["name"] in chosen_asset), None)
+            chosen_asset_name = view.select.selected_value
+            asset_obj = next((a for a in DYNAMIC_ASSETS if a["name"] == chosen_asset_name), None)
             if not asset_obj:
-                return await message.channel.send("❌ حدث خطأ في اختيار الأصل.", delete_after=5)
+                return await message.channel.send("❌ المنتج غير موجود.", delete_after=5)
 
             total_cost = asset_obj["price"] * count
             current_pts = get_user_points(guild_id, user_id)
 
             if current_pts < total_cost:
-                return await message.channel.send(f"❌ نقاطك غير كافية لشراء هذا العدد! التكلفة الإجمالية: `{total_cost}` نقطة، ورصيدك: `{current_pts}` نقطة.", delete_after=5)
+                return await message.channel.send(f"❌ نقاطك غير كافية لشراء هذا المنتج! التكلفة: `{total_cost}`", delete_after=5)
 
             new_total = add_points(guild_id, user_id, -total_cost)
-            success_embed = discord.Embed(
-                title="✅ تم الشراء بنجاح",
-                description=f"🛍️ لقد قمت بشراء **{count}** من ({chosen_asset}) بنجاح!\n💰 التكلفة الإجمالية: `-{total_cost}` نقطة\n💼 رصيدك الحالي: `{new_total}` نقطة",
-                color=discord.Color.green()
-            )
-            try:
-                await msg.edit(embed=success_embed, view=None)
-            except:
-                await message.channel.send(embed=success_embed)
+            success_msg = f"مبـروك يا {message.author.mention}! اشتريت {chosen_asset_name} بنجاح مقابل `{total_cost}` نقطة!"
+            try: await msg.edit(content=success_msg, embed=None, view=None)
+            except: await message.channel.send(success_msg)
             return
 
-        # 4. نظام تحويل الممتلكات
-        if text.startswith("تحويل ممتلكات") or text.startswith("!تحويل ممتلكات"):
-            if not message.mentions:
-                return await message.channel.send("❌ يرجى منشن الشخص المراد التحويل له (مثال: `تحويل ممتلكات @user 5`)", delete_after=5)
-            
-            target_user = message.mentions[0]
-            if target_user.id == user_id:
-                return await message.channel.send("❌ لا يمكنك تحويل ممتلكات لنفسك!", delete_after=5)
-
+        # 5. نظام البيع (مثل الشراء)
+        if text.startswith("بيع") or text.startswith("!بيع"):
             parts = message.content.strip().split()
-            count = 0
-            for p in reversed(parts):
-                if p.isdigit():
-                    count = int(p)
-                    break
+            count = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
 
-            if count <= 0:
-                return await message.channel.send("❌ يرجى تحديد العدد الصحيح للممتلكات المراد تحويلها (مثال: `تحويل ممتلكات @user 3`)", delete_after=5)
-
-            view = AssetView(ASSETS_LIST)
-            embed = discord.Embed(
-                title="🎁 قائمة تحويل الممتلكات",
-                description=f"المستلم: {target_user.mention}\nالعدد المراد تحويله: `{count}`\nاختر نوع الممتلك من القائمة أدناه للتحويل:",
-                color=discord.Color.purple()
-            )
+            view = AssetView(DYNAMIC_ASSETS)
+            embed = discord.Embed(title="💰 البيع", description="اختر المنتج المراد بيعه من القائمة بالأسفل", color=discord.Color.orange())
             msg = await message.channel.send(embed=embed, view=view)
             await view.wait()
 
             if view.cancelled or not view.select.selected_value:
-                try:
-                    await msg.delete()
-                except:
-                    pass
+                try: await msg.delete()
+                except: pass
                 return
 
-            chosen_text = view.select.selected_value
-            chosen_asset = chosen_text.split(" (السعر:")[0]
+            chosen_asset_name = view.select.selected_value
+            asset_obj = next((a for a in DYNAMIC_ASSETS if a["name"] == chosen_asset_name), None)
+            if not asset_obj:
+                return await message.channel.send("❌ المنتج غير موجود.", delete_after=5)
 
-            transfer_embed = discord.Embed(
-                title="✨ تمت عملية تحويل الممتلكات",
-                description=f"📦 تم تحويل **{count}** من ({chosen_asset}) بنجاح إلى العضو {target_user.mention}!",
-                color=discord.Color.gold()
-            )
-            try:
-                await msg.edit(embed=transfer_embed, view=None)
-            except:
-                await message.channel.send(embed=transfer_embed)
+            total_gain = int((asset_obj["price"] * count) * 0.8) # ربح البيع 80% من القيمة
+            new_total = add_points(guild_id, user_id, total_gain)
+            success_msg = f"✅ تم بيع {count} من `{chosen_asset_name}` بنجاح واسترداد `{total_gain}` نقطة!"
+            try: await msg.edit(content=success_msg, embed=None, view=None)
+            except: await message.channel.send(success_msg)
             return
 
-        # 1. نظام التداول (دول أجنبية)
+        # 6. نظام تحويل الممتلكات / النقاط
+        if text.startswith("تحويل") or text.startswith("!تحويل"):
+            if not message.mentions:
+                return await message.channel.send("❌ يرجى منشن الشخص المراد التحويل له والمبلغ (مثال: `تحويل @user 100`)", delete_after=5)
+            
+            target_user = message.mentions[0]
+            if target_user.id == user_id:
+                return await message.channel.send("❌ لا يمكنك التحويل لنفسك!", delete_after=5)
+
+            parts = message.content.strip().split()
+            amount = 0
+            for p in reversed(parts):
+                if p.isdigit():
+                    amount = int(p)
+                    break
+
+            if amount <= 0:
+                return await message.channel.send("❌ يرجى تحديد مبلغ صحيح للتحويل.", delete_after=5)
+
+            current_pts = get_user_points(guild_id, user_id)
+            if current_pts < amount:
+                return await message.channel.send("❌ ليس لديك نقاط كافية لإتمام التحويل.", delete_after=5)
+
+            add_points(guild_id, user_id, -amount)
+            new_target_pts = add_points(guild_id, target_user.id, amount)
+            
+            return await message.channel.send(f"✨ تم تحويل `{amount}` نقطة بنجاح إلى العضو {target_user.mention}!")
+
+        # 7. نظام التداول (يدعم كامل أو نص أو رقم)
         if text.startswith("تداول") or text.startswith("!تداول"):
             parts = message.content.strip().split()
             current_pts = get_user_points(guild_id, user_id)
 
             if len(parts) < 2:
-                return await message.channel.send("❌ الاستخدام الصحيح: `تداول [المبلغ]` أو `تداول كامل`", delete_after=5)
+                return await message.channel.send("❌ الاستخدام: `تداول [المبلغ]` أو `تداول كامل` أو `تداول نص`", delete_after=5)
             
             if parts[1] == "كامل":
                 amount = current_pts
+            elif parts[1] == "نص":
+                amount = current_pts // 2
             elif parts[1].isdigit():
                 amount = int(parts[1])
             else:
-                return await message.channel.send("❌ يرجى كتابة مبلغ صحيح أو كلمة `كامل`.", delete_after=5)
+                return await message.channel.send("❌ صيغة المبلغ غير صحيحة.", delete_after=5)
 
-            if amount <= 0:
-                return await message.channel.send("❌ ليس لديك نقاط كافية أو رصيدك صفر للتداول.", delete_after=5)
-
-            if current_pts < amount:
-                return await message.channel.send(f"❌ نقاطك غير كافية! رصيدك الحالي `{current_pts}` نقطة.", delete_after=5)
+            if amount <= 0 or current_pts < amount:
+                return await message.channel.send("❌ رصيدك غير كافٍ للتداول بهذه القيمة.", delete_after=5)
 
             rem = self.check_cooldown(user_id, "trading")
             if rem > 0:
                 mins, secs = divmod(rem, 60)
-                return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** قبل القيام بعملية تداول أخرى!", delete_after=5)
+                return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للتداول مرة أخرى!", delete_after=5)
 
             view = MarketView(TRADING_COUNTRIES)
-            embed = discord.Embed(
-                title="📈 نافذة سوق التداول الأجنبي",
-                description=f"المبلغ: `{amount}`\n\nاختر الدولة أو السوق من القائمة أدناه:",
-                color=discord.Color.orange()
-            )
+            embed = discord.Embed(title="📈 نافذة سوق التداول الأجنبي", description=f"المبلغ: `{amount}`\nاختر الدولة:", color=discord.Color.orange())
             msg = await message.channel.send(embed=embed, view=view)
-
             await view.wait()
 
             if view.cancelled or not view.select.selected_value:
-                try:
-                    await msg.delete()
-                except:
-                    pass
+                try: await msg.delete()
+                except: pass
                 return
 
             chosen_country = view.select.selected_value
@@ -305,70 +329,51 @@ class MarketCog(commands.Cog):
 
             is_win = random.choice([True, False, True])
             if is_win:
-                percentage = random.randint(15, 85)
-                profit = int(amount * (percentage / 100))
+                profit = int(amount * (random.randint(15, 85) / 100))
                 new_total = add_points(guild_id, user_id, profit)
-                res_embed = discord.Embed(
-                    title=f"🟢 نتيجة التداول في ({chosen_country})",
-                    description=f"🎉 **مبروك! نجحت صفقة التداول.**\n📊 نسبة النجاح: `+{percentage}%`\n💰 الربح المحقق: `+{profit}` نقطة\n💼 رصيدك الجديد: `{new_total}` نقطة",
-                    color=discord.Color.green()
-                )
+                res_embed = discord.Embed(title=f"🟢 تداول ناجح في ({chosen_country})", description=f"💰 ربحت: `+{profit}` نقطة\n💼 رصيدك: `{new_total}`", color=discord.Color.green())
             else:
-                percentage = random.randint(10, 60)
-                loss = int(amount * (percentage / 100))
+                loss = int(amount * (random.randint(10, 60) / 100))
                 new_total = add_points(guild_id, user_id, -loss)
-                res_embed = discord.Embed(
-                    title=f"🔴 نتيجة التداول في ({chosen_country})",
-                    description=f"📉 **للأسف! هبطت السوق وخسرت الصفقة.**\n📊 نسبة الخسارة: `-{percentage}%`\n💸 الخسارة: `-{loss}` نقطة\n💼 رصيدك الجديد: `{new_total}` نقطة",
-                    color=discord.Color.red()
-                )
-            try:
-                await msg.edit(embed=res_embed, view=None)
-            except:
-                await message.channel.send(embed=res_embed)
+                res_embed = discord.Embed(title=f"🔴 خسارة في ({chosen_country})", description=f"💸 خسرت: `-{loss}` نقطة\n💼 رصيدك: `{new_total}`", color=discord.Color.red())
+            
+            try: await msg.edit(embed=res_embed, view=None)
+            except: await message.channel.send(embed=res_embed)
             return
 
-        # 2. نظام الاستثمار (دول عربية)
+        # 8. نظام الاستثمار (يدعم كامل أو نص أو رقم)
         if text.startswith("استثمار") or text.startswith("!استثمار"):
             parts = message.content.strip().split()
             current_pts = get_user_points(guild_id, user_id)
 
             if len(parts) < 2:
-                return await message.channel.send("❌ الاستخدام الصحيح: `استثمار [المبلغ]` أو `استثمار كامل`", delete_after=5)
+                return await message.channel.send("❌ الاستخدام: `استثمار [المبلغ]` أو `استثمار كامل` أو `استثمار نص`", delete_after=5)
             
             if parts[1] == "كامل":
                 amount = current_pts
+            elif parts[1] == "نص":
+                amount = current_pts // 2
             elif parts[1].isdigit():
                 amount = int(parts[1])
             else:
-                return await message.channel.send("❌ يرجى كتابة مبلغ صحيح أو كلمة `كامل`.", delete_after=5)
+                return await message.channel.send("❌ صيغة المبلغ غير صحيحة.", delete_after=5)
 
-            if amount <= 0:
-                return await message.channel.send("❌ ليس لديك نقاط كافية أو رصيدك صفر للاستثمار.", delete_after=5)
-
-            if current_pts < amount:
-                return await message.channel.send(f"❌ نقاطك غير كافية للاستثمار! رصيدك الحالي `{current_pts}` نقطة.", delete_after=5)
+            if amount <= 0 or current_pts < amount:
+                return await message.channel.send("❌ رصيدك غير كافٍ للاستثمار بهذه القيمة.", delete_after=5)
 
             rem = self.check_cooldown(user_id, "investment")
             if rem > 0:
                 mins, secs = divmod(rem, 60)
-                return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** قبل القيام بعملية استثمار أخرى!", delete_after=5)
+                return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للاستثمار مرة أخرى!", delete_after=5)
 
             view = MarketView(INVESTMENT_COUNTRIES)
-            embed = discord.Embed(
-                title="🏢 نافذة صندوق الاستثمار العربي",
-                description=f"المبلغ: `{amount}`\n\nاختر الدولة العربية من القائمة أدناه:",
-                color=discord.Color.gold()
-            )
+            embed = discord.Embed(title="🏢 صندوق الاستثمار العربي", description=f"المبلغ: `{amount}`\nاختر الدولة:", color=discord.Color.gold())
             msg = await message.channel.send(embed=embed, view=view)
-
             await view.wait()
 
             if view.cancelled or not view.select.selected_value:
-                try:
-                    await msg.delete()
-                except:
-                    pass
+                try: await msg.delete()
+                except: pass
                 return
 
             chosen_country = view.select.selected_value
@@ -376,27 +381,16 @@ class MarketCog(commands.Cog):
 
             is_win = random.choice([True, True, False])
             if is_win:
-                percentage = random.randint(20, 100)
-                profit = int(amount * (percentage / 100))
+                profit = int(amount * (random.randint(20, 100) / 100))
                 new_total = add_points(guild_id, user_id, profit)
-                res_embed = discord.Embed(
-                    title=f"🟢 نتيجة الاستثمار في ({chosen_country})",
-                    description=f"🌟 **ألف مبروك! أثمر المشروع الاستثماري بنجاح.**\n📊 نسبة العائد والنجاح: `+{percentage}%`\n💰 العوائد النقدية: `+{profit}` نقطة\n💼 رصيدك الجديد: `{new_total}` نقطة",
-                    color=discord.Color.green()
-                )
+                res_embed = discord.Embed(title=f"🟢 استثمار ناجح في ({chosen_country})", description=f"💰 العوائد: `+{profit}` نقطة\n💼 رصيدك: `{new_total}`", color=discord.Color.green())
             else:
-                percentage = random.randint(10, 50)
-                loss = int(amount * (percentage / 100))
+                loss = int(amount * (random.randint(10, 50) / 100))
                 new_total = add_points(guild_id, user_id, -loss)
-                res_embed = discord.Embed(
-                    title=f"🔴 نتيجة الاستثمار في ({chosen_country})",
-                    description=f"📉 **تراجع طفيف في أرباح المشروع.**\n📊 نسبة الهبوط: `-{percentage}%`\n💸 قيمة الخسارة: `-{loss}` نقطة\n💼 رصيدك الجديد: `{new_total}` نقطة",
-                    color=discord.Color.red()
-                )
-            try:
-                await msg.edit(embed=res_embed, view=None)
-            except:
-                await message.channel.send(embed=res_embed)
+                res_embed = discord.Embed(title=f"🔴 تراجع استثماري في ({chosen_country})", description=f"💸 الخسارة: `-{loss}` نقطة\n💼 رصيدك: `{new_total}`", color=discord.Color.red())
+            
+            try: await msg.edit(embed=res_embed, view=None)
+            except: await message.channel.send(embed=res_embed)
             return
 
 async def setup(bot):
