@@ -4,9 +4,43 @@ import random
 import asyncio
 import sqlite3
 import os
+import shutil
 from datetime import datetime, timedelta
 
 DB_FILE = "database.db"
+BACKUP_FILE = "database_backup.db"
+
+# دالة لعمل نسخة احتياطية من قاعدة البيانات لضمان عدم ضياع النقاط نهائياً
+def backup_db():
+    if os.path.exists(DB_FILE):
+        try:
+            shutil.copyfile(DB_FILE, BACKUP_FILE)
+        except Exception:
+            pass
+
+def init_db():
+    if not os.path.exists(DB_FILE) and os.path.exists(BACKUP_FILE):
+        try:
+            shutil.copyfile(BACKUP_FILE, DB_FILE)
+        except Exception:
+            pass
+
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            guild_id TEXT,
+            user_id TEXT,
+            points INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    ''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS inventory (guild_id TEXT, user_id TEXT, item_name TEXT)''')
+    conn.commit()
+    conn.close()
+    backup_db()
+
+init_db()
 
 # قاموس لتتبع وقت آخر لعب لكل مستخدم لكل لعبة (Cooldown: دقيقتين)
 user_cooldowns = {}
@@ -35,6 +69,7 @@ def add_points(guild_id, user_id, amount):
     cursor.execute("SELECT points FROM users WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
     res = cursor.fetchone()[0]
     conn.close()
+    backup_db()
     return res
 
 # جدول المنتجات في المتجر
@@ -73,6 +108,30 @@ GAMES_LIST = [
     {"name": "حرب الكلمات المشتعلة", "cmd": "حرب", "desc": "تحدي جماعي حماسي"}
 ]
 
+# أزرار تفاعلية للألعاب لاختيار الخيارات (A, B, C, D) بدلاً من الكتابة وحدها
+class GameChoiceView(discord.ui.View):
+    def __init__(self, options, author_id):
+        super().__init__(timeout=15.0)
+        self.value = None
+        self.author_id = author_id
+
+        for i, opt in enumerate(options):
+            btn = discord.ui.Button(label=opt, style=discord.ButtonStyle.primary, custom_id=f"opt_{i}")
+            btn.callback = self.create_callback(opt)
+            self.add_item(btn)
+
+    def create_callback(self, opt_text):
+        async def button_callback(interaction: discord.Interaction):
+            if interaction.user.id != self.author_id:
+                return await interaction.response.send_message("❌ هذه اللعبة ليست لك!", ephemeral=True)
+            self.value = opt_text
+            await interaction.response.defer()
+            self.stop()
+        return button_callback
+
+    async def on_timeout(self):
+        self.stop()
+
 class InteractiveGamesCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -99,21 +158,13 @@ class InteractiveGamesCog(commands.Cog):
         user_id = message.author.id
         channel_id = message.channel.id
 
-        # التحقق الحصري من أن جميع الأوامر تعمل فقط في القناة المحددة
         if channel_id != self.target_channel_id:
             return
-
-        # تهيئة قاعدة بيانات الحقيبة والممتلكات إن لم تكن موجودة
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute('''CREATE TABLE IF NOT EXISTS inventory (guild_id TEXT, user_id TEXT, item_name TEXT)''')
-        conn.commit()
-        conn.close()
 
         # 1. قائمة الأوامر العامة
         if text in ["اوامر", "!اوامر", "/اوامر"]:
             embed = discord.Embed(
-                title="📜 قائمة الأوامر والألعاب",
+                title="📜 قائمة الأوامر والألعاب التفاعلية",
                 description="مرحباً بك! إليك دليل الاستخدام والأوامر المتاحة:",
                 color=discord.Color.blue()
             )
@@ -121,7 +172,7 @@ class InteractiveGamesCog(commands.Cog):
                 name="🎲 الألعاب والمتجر",
                 value="• `العاب` — لعرض قائمة الـ 26 لعبة.\n"
                       "• `اسعار` — لعرض أسعار الأغراض.\n"
-                      "• `شراء` — لعرض قائمة المتجر والشراء التفاعلي (مثال: شراء 1).\n"
+                      "• `شراء` — لشراء الأغراض (مثال: شراء 1).\n"
                       "• `بيع` — لبيع أغراضك واسترداد النقاط (مثال: بيع سيف الأساطير).\n"
                       "• `ممتلكات` أو `حقيبتي` — لعرض محتويات حقيبتك.",
                 inline=False
@@ -134,7 +185,7 @@ class InteractiveGamesCog(commands.Cog):
         if text in ["العاب", "!العاب", "/العاب"]:
             embed = discord.Embed(
                 title="🎮 الألعاب والأنظمة التفاعلية (26 لعبة باللغة العربية)",
-                description="كل لعبة تفاعلية تتطلب منك الخيار ولكل لعبة وقت انتظار دقيقتين:",
+                description="كل لعبة تفاعلية تتطلب خيارات وأزرار حماسية لكل لعبة وقت انتظار دقيقتين:",
                 color=discord.Color.gold()
             )
             part1 = "\n".join([f"{i+1}️⃣ **{g['name']}**: `{g['cmd']}`" for i, g in enumerate(GAMES_LIST[:13])])
@@ -167,7 +218,6 @@ class InteractiveGamesCog(commands.Cog):
             if current_pts < item["price"]:
                 return await message.channel.send(f"❌ لا توجد نقاط كافية لديك! رصيدك `{current_pts}` وتحتاج إلى `{item['price']}` نقطة.", delete_after=5)
             
-            # خصم النقاط وإضافة الغرض للحقتيبة
             add_points(guild_id, user_id, -item["price"])
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
@@ -210,16 +260,15 @@ class InteractiveGamesCog(commands.Cog):
                 conn.close()
                 return await message.channel.send(f"❌ ليس لديك غرض بهذا الاسم في حقيبتك!", delete_after=5)
             
-            # حذف الغرض من الحقيبة وإرجاع نصف سعره أو سعره كاملاً
             cursor.execute("DELETE FROM inventory WHERE rowid = ?", (row[0],))
             conn.commit()
             conn.close()
             
-            refund = 75 # استرداد افتراضي أو حسب السعر
+            refund = 75
             new_pts = add_points(guild_id, user_id, refund)
             return await message.channel.send(f"✅ تم بيع الغرض بنجاح واسترداد **{refund} نقطة**! رصيدك الحالي: `{new_pts}`")
 
-        # 7. أمر إعطاء النقاط (خاص بمالك السيرفر)
+        # 7. أمر إعطاء النقاط (خاص بمالك السيرفر) - مع دعم `نرد @شخص مبلغ` أو `تحدي @شخص`
         if text.startswith("نقاط ") or text.startswith("!نقاط ") or text.startswith("/نقاط "):
             if message.author.id != message.guild.owner_id:
                 return await message.channel.send("❌ هذا الأمر مخصص لمالك السيرفر فقط!", delete_after=5)
@@ -238,150 +287,270 @@ class InteractiveGamesCog(commands.Cog):
             await message.channel.send(f"✅ تم إضافة **{amount}** نقطة بنجاح إلى {target_user.mention}!\nرصيده الحالي: `{new_tot}` نقطة.")
             return
 
-        # --- تفاعلات الألعاب الحقيقية التي تتطلب اختيارك وتفاعلك مع وقت انتظار دقيقتين لكل لعبة ---
-        
-        # 1. لعبة النرد السريع (تفاعلية باختيار اتجاه النرد أو التوقع)
+        # 8. حل مشكلة أمر النرد بـ منشن ومبلغ (مثال: نرد @شخص 50)
+        if text.startswith("نرد "):
+            parts = message.content.strip().split()
+            if message.mentions:
+                target_user = message.mentions[0]
+                if target_user.id == user_id:
+                    return await message.channel.send("❌ لا يمكنك تحدي نفسك في النرد!", delete_after=5)
+                
+                amount = 50
+                for p in parts:
+                    if p.isdigit():
+                        amount = int(p)
+                        break
+                
+                rem = self.check_cooldown(user_id, "نرد_تحدي")
+                if rem > 0:
+                    mins, secs = divmod(rem, 60)
+                    return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** لتحدي النرد مرة أخرى!", delete_after=5)
+
+                user_pts = get_user_points(guild_id, user_id)
+                target_pts = get_user_points(guild_id, target_user.id)
+
+                if user_pts < amount or target_pts < amount:
+                    return await message.channel.send(f"❌ أحد الطرفين لا يملك نقاط كافية لرهان بقيمة `{amount}` نقطة!", delete_after=5)
+
+                await message.channel.send(f"🎲 {target_user.mention}, لقد تحداك {message.author.mention} في لعبة النرد برهان **{amount} نقطة**!\nاكتب `قبول` في الشات خلال 15 ثانية للموافقة:")
+                def check_accept(m):
+                    return m.author.id == target_user.id and m.channel.id == channel_id and m.content.strip() == "قبول"
+                try:
+                    await self.bot.wait_for("message", timeout=15.0, check=check_accept)
+                    r1 = random.randint(1, 6)
+                    r2 = random.randint(1, 6)
+                    
+                    if r1 > r2:
+                        add_points(guild_id, target_user.id, -amount)
+                        new_p = add_points(guild_id, user_id, amount)
+                        await message.channel.send(f"🏆 النرد أسفر عن: ({message.author.name}: `{r1}` VS {target_user.name}: `{r2}`).\nفاز {message.author.mention} وربح `{amount}` نقطة! رصيده الجديد: `{new_p}`")
+                    elif r2 > r1:
+                        add_points(guild_id, user_id, -amount)
+                        new_p = add_points(guild_id, target_user.id, amount)
+                        await message.channel.send(f"🏆 النرد أسفر عن: ({message.author.name}: `{r1}` VS {target_user.name}: `{r2}`).\nفاز {target_user.mention} وربح `{amount}` نقطة! رصيده الجديد: `{new_p}`")
+                    else:
+                        await message.channel.send(f"🤝 تعادل في النرد (`{r1}` مقابل `{r2}`)! لم يتم خصم أو إضافة نقاط.")
+                except asyncio.TimeoutError:
+                    await message.channel.send(f"⌛ انتهى الوقت ولم يقبل {target_user.mention} التحدي.")
+                return
+
+        # 9. حل مشكلة أمر التحدي المباشر بين لاعبين (مثال: تحدي @شخص)
+        if text.startswith("تحدي "):
+            if message.mentions:
+                target_user = message.mentions[0]
+                if target_user.id == user_id:
+                    return await message.channel.send("❌ لا يمكنك تحدي نفسك!", delete_after=5)
+
+                rem = self.check_cooldown(user_id, "مبارزة")
+                if rem > 0:
+                    mins, secs = divmod(rem, 60)
+                    return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للمبارزة مرة أخرى!", delete_after=5)
+
+                await message.channel.send(f"⚔️ {target_user.mention}, أرسل لك {message.author.mention} تحدياً مباشراً!\nاكتب `موافقة` خلال 15 ثانية لدخول المعركة:")
+                def check_duel(m):
+                    return m.author.id == target_user.id and m.channel.id == channel_id and m.content.strip() == "موافقة"
+                try:
+                    await self.bot.wait_for("message", timeout=15.0, check=check_duel)
+                    winner = random.choice([message.author, target_user])
+                    loser = target_user if winner == message.author else message.author
+                    
+                    add_points(guild_id, loser.id, -30)
+                    new_win_pts = add_points(guild_id, winner.id, 50)
+                    
+                    await message.channel.send(f"🔥 اشتعلت المعركة بين المحاربين!\n👑 البطل الفائز: {winner.mention} وحصل على **+50 نقطة** (رصيده: {new_win_pts})\n💀 الخاسر: {loser.mention} وخسر **-30 نقطة**.")
+                except asyncio.TimeoutError:
+                    await message.channel.send(f"⌛ انتهى الوقت ولم يستجب {target_user.mention} للتحدي.")
+                return
+
+        # --- الألعاب التفاعلية الحماسية الجديدة (خيارات وأزرار تفاعلية ممتعة مثل الصيد والكنز والأسئلة) ---
+
+        # 1. لعبة الصيد التفاعلية (بأزرار خيارات متعددة)
+        if text == "كنز" or text == "صيد":
+            rem = self.check_cooldown(user_id, "صيد")
+            if rem > 0:
+                mins, secs = divmod(rem, 60)
+                return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** لرحلة الصيد القادمة!", delete_after=5)
+
+            options = ["🐟 سمكة صغيرة", "🦈 قرش متوحش", "🪙 صندوق كنز ذهبي", "👢 حذاء قديم"]
+            view = GameChoiceView(options, user_id)
+            embed = discord.Embed(
+                title="🎣 رحلة صيد الكنوز البحرية",
+                description=f"يا {message.author.mention}! ألقيت صنارة الصيد في البحر العميق... اختر أين تبحث أو ماذا تصطاد بالأزرار أدناه:",
+                color=discord.Color.blue()
+            )
+            msg = await message.channel.send(embed=embed, view=view)
+            await view.wait()
+
+            if view.value is None:
+                try: await msg.delete()
+                except: pass
+                return await message.channel.send(f"⌛ انتهى الوقت ولم تقم بالصيد يا {message.author.mention}!")
+
+            chosen = view.value
+            if "سمكة صغيرة" in chosen:
+                reward = random.choice([20, 35, 40])
+                pts = add_points(guild_id, user_id, reward)
+                res_desc = f" لقد اصطدت **سمكة صغيرة لذيذة**! ربحت **+{reward} نقطة** (رصيدك: {pts})"
+            elif "قرش متوحش" in chosen:
+                reward = random.choice([70, 100, 120])
+                pts = add_points(guild_id, user_id, reward)
+                res_desc = f" هجم عليك قرش شرس لكنك سيطرت عليه وصطدته! كنز كبير ربحت **+{reward} نقطة** (رصيدك: {pts})"
+            elif "صندوق كنز ذهبي" in chosen:
+                reward = random.choice([150, 200, 250])
+                pts = add_points(guild_id, user_id, reward)
+                res_desc = f" يا له من حظ أسطوري! وجدت **صندوق كنز ذهبي** مغطى بالمجوهرات! ربحت **+{reward} نقطة** (رصيدك: {pts})"
+            else:
+                loss = 15
+                pts = add_points(guild_id, user_id, -loss)
+                res_desc = f" للأسف... اصطدت **حذاءً قديماً متهالكاً** وضاعت تعبك (-{loss} نقطة، رصيدك: {pts})"
+
+            try: await msg.edit(content=f"🎣 **نتيجة الصيد:**{res_desc}", embed=None, view=None)
+            except: await message.channel.send(f"🎣 **نتيجة الصيد:**{res_desc}")
+            return
+
+        # 2. لعبة النرد السريع بالتفاعل الأزرار
         if text == "نرد":
             rem = self.check_cooldown(user_id, "نرد")
             if rem > 0:
                 mins, secs = divmod(rem, 60)
-                return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للعب (النرد السريع) مرة أخرى!", delete_after=5)
+                return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** لرمي النرد مرة أخرى!", delete_after=5)
 
-            await message.channel.send(f"🎲 يا {message.author.mention}! هل توقعك لنردك سيكون **عالي** (4 إلى 6) أم **منخفض** (1 إلى 3)؟\nاكتب اختيارك في الشات خلال 10 ثواني:")
-            def check(m):
-                return m.author.id == user_id and m.channel.id == channel_id and m.content.strip().lower() in ["عالي", "منخفض"]
-            try:
-                user_msg = await self.bot.wait_for("message", timeout=10.0, check=check)
-                choice = user_msg.content.strip().lower()
-                roll = random.randint(1, 6)
-                is_high = roll >= 4
-                user_won = (choice == "عالي" and is_high) or (choice == "منخفض" and not is_high)
-                
-                if user_won:
-                    pts = add_points(guild_id, user_id, 40)
-                    await message.channel.send(f"🎉 طلع النرد (`{roll}`). توقعك كان صحيحاً! **ربحت 40 نقطة** (رصيدك: {pts})")
-                else:
-                    await message.channel.send(f"❌ طلع النرد (`{roll}`). توقعك كان خاطئاً، حظاً أوفر!")
-            except asyncio.TimeoutError:
-                await message.channel.send(f"⌛ انتهى الوقت ولم تقم باختيار التوقع!")
+            options = ["عالي (4-6)", "منخفض (1-3)"]
+            view = GameChoiceView(options, user_id)
+            embed = discord.Embed(title="🎲 تحدي النرد السريع", description=f"يا {message.author.mention}! اختر توقعك لرمية النرد بالأزرار أدناه:", color=discord.Color.dark_magenta())
+            msg = await message.channel.send(embed=embed, view=view)
+            await view.wait()
 
-        # 2. لعبة الحظ أو الروليت (تفاعلية باختيار باب الكنز)
+            if view.value is None:
+                try: await msg.delete()
+                except: pass
+                return await message.channel.send("⌛ انتهى الوقت ولم تقم بالختيار!")
+
+            roll = random.randint(1, 6)
+            is_high = roll >= 4
+            user_choice_high = "عالي" in view.value
+            user_won = (user_choice_high and is_high) or (not user_choice_high and not is_high)
+
+            if user_won:
+                pts = add_points(guild_id, user_id, 50)
+                result_text = f"🎉 طلع النرد (`{roll}`). توقعك كان صحيحاً تماماً! **ربحت 50 نقطة** (رصيدك: {pts})"
+            else:
+                result_text = f"❌ طلع النرد (`{roll}`). توقعك كان خاطئاً، حظاً أوفر في المرة القادمة!"
+
+            try: await msg.edit(content=result_text, embed=None, view=None)
+            except: await message.channel.send(result_text)
+            return
+
+        # 3. لعبة الحظ أو الروليت بالأبواب الثلاثة والأزرار التفاعلية
         elif text in ["حظ", "روليت"]:
             rem = self.check_cooldown(user_id, "حظ")
             if rem > 0:
                 mins, secs = divmod(rem, 60)
-                return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** لتدوير (عجلة الحظ) مرة أخرى!", delete_after=5)
+                return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** لتدوير عجلة الحظ مرة أخرى!", delete_after=5)
 
-            await message.channel.send(f"🎰 أمامك 3 أبواب مغلقة يا {message.author.mention}: `باب 1` أو `باب 2` أو `باب 3`.\nاكتب رقم الباب الذي تختاره في الشات خلال 10 ثواني:")
-            def check(m):
-                return m.author.id == user_id and m.channel.id == channel_id and m.content.strip().lower() in ["باب 1", "باب 2", "باب 3", "1", "2", "3"]
-            try:
-                await self.bot.wait_for("message", timeout=10.0, check=check)
-                reward = random.choice([50, 100, -20, 150, 0, 80])
-                pts = add_points(guild_id, user_id, reward)
-                if reward > 0:
-                    await message.channel.send(f"✨ فتحت الباب ووجد خلفه كنز بقيمة **+{reward} نقطة**! رصيدك: `{pts}`")
-                elif reward < 0:
-                    await message.channel.send(f"💥 عصف بك فخ خلف الباب وخسرت **{reward} نقطة**! رصيدك: `{pts}`")
-                else:
-                    await message.channel.send(f"💨 الباب كان فارغاً! لم تربح ولم تخسر.")
-            except asyncio.TimeoutError:
-                await message.channel.send(f"⌛ انتهى الوقت ولم تختر الباب المناسب!")
+            options = ["الباب الأول 🚪", "الباب الثاني 🚪", "الباب الثالث 🚪"]
+            view = GameChoiceView(options, user_id)
+            embed = discord.Embed(title="🎰 عجلة الحظ والأبواب السرية", description=f"يا {message.author.mention}! أمامك 3 أبواب مغلقة، اختر باباً لتكتشف ما خلفه بالأزرار أدناه:", color=discord.Color.orange())
+            msg = await message.channel.send(embed=embed, view=view)
+            await view.wait()
 
-        # 3. حجرة ورقة مقص
+            if view.value is None:
+                try: await msg.delete()
+                except: pass
+                return await message.channel.send("⌛ انتهى الوقت ولم تختر الباب المناسب!")
+
+            reward = random.choice([60, 120, -30, 180, 0, 90])
+            pts = add_points(guild_id, user_id, reward)
+            if reward > 0:
+                res_text = f"✨ فتحت {view.value} ووجدات خلفه كنزاً بقيمة **+{reward} نقطة**! رصيدك: `{pts}`"
+            elif reward < 0:
+                res_text = f"💥 اصطدمت بفخ خلف {view.value} وخسرت **{reward} نقطة**! رصيدك: `{pts}`"
+            else:
+                res_text = f"💨 {view.value} كان فارغاً وخاوياً على عروشه! لم تربح ولم تخسر."
+
+            try: await msg.edit(content=res_text, embed=None, view=None)
+            except: await message.channel.send(res_text)
+            return
+
+        # 4. حجرة ورقة مقص بالأزرار التفاعلية
         elif text in ["مقص", "حجر ورقة مقص"]:
             rem = self.check_cooldown(user_id, "مقص")
             if rem > 0:
                 mins, secs = divmod(rem, 60)
                 return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للعب (حجرة ورقة مقص) مرة أخرى!", delete_after=5)
 
-            await message.channel.send(f"✂️ هيا يا {message.author.mention}! اكتب خيارك في الشات خلال 10 ثواني:\n`حجر` أو `ورقة` أو `مقص`")
-            def check(m):
-                return m.author.id == user_id and m.channel.id == channel_id and m.content.strip().lower() in ["حجر", "ورقة", "مقص"]
-            try:
-                user_msg = await self.bot.wait_for("message", timeout=10.0, check=check)
-                choice = user_msg.content.strip().lower()
-                bot_choice = random.choice(["حجر", "ورقة", "مقص"])
-                
-                if choice == bot_choice:
-                    await message.channel.send(f"🤝 اختيارك ({choice}) والبوت ({bot_choice}) -> **تعادل!**")
-                elif (choice == "حجر" and bot_choice == "مقص") or (choice == "ورقة" and bot_choice == "حجر") or (choice == "مقص" and bot_choice == "ورقة"):
-                    pts = add_points(guild_id, user_id, 50)
-                    await message.channel.send(f"🎉 اختيارك ({choice}) والبوت ({bot_choice}) -> **فزت وربحت 50 نقطة!** (رصيدك: {pts})")
-                else:
-                    await message.channel.send(f"❌ اختيارك ({choice}) والبوت ({bot_choice}) -> **خسرت أمام البوت!**")
-            except asyncio.TimeoutError:
-                await message.channel.send(f"⌛ انتهى الوقت ولم ترد بالخيار!")
+            options = ["حجر 🪨", "ورقة 📄", "مقص ✂️"]
+            view = GameChoiceView(options, user_id)
+            embed = discord.Embed(title="✂️ تحدي حجرة ورقة مقص الكلاسيكي", description=f"يا {message.author.mention}! اختر سلاحك بالأزرار أدناه لمواجهة البوت:", color=discord.Color.red())
+            msg = await message.channel.send(embed=embed, view=view)
+            await view.wait()
 
-        # 4. تخمين الرقم
-        elif text == "تخمين":
-            rem = self.check_cooldown(user_id, "تخمين")
-            if rem > 0:
-                mins, secs = divmod(rem, 60)
-                return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للعب (تخمين الرقم) مرة أخرى!", delete_after=5)
+            if view.value is None:
+                try: await msg.delete()
+                except: pass
+                return await message.channel.send("⌛ انتهى الوقت ولمختر خيارك!")
 
-            secret = random.randint(1, 5)
-            await message.channel.send(f"🎯 اخترت رقماً سرياً بين **1 و 5**. اكتب رقمك في الشات خلال 8 ثواني:")
-            def check(m):
-                return m.author.id == user_id and m.channel.id == channel_id and m.content.strip().isdigit()
-            try:
-                user_msg = await self.bot.wait_for("message", timeout=8.0, check=check)
-                guess = int(user_msg.content.strip())
-                if guess == secret:
-                    pts = add_points(guild_id, user_id, 80)
-                    await message.channel.send(f"🏆 كفووو! الرقم الصحيح كان (`{secret}`). **ربحت 80 نقطة!** (رصيدك: {pts})")
-                else:
-                    await message.channel.send(f"❌ خطأ! الرقم السري كان `{secret}`.")
-            except asyncio.TimeoutError:
-                await message.channel.send(f"⌛ انتهى الوقت! الرقم السري كان `{secret}`.")
+            choice = "حجر" if "حجر" in view.value else ("ورقة" if "ورقة" in view.value else "مقص")
+            bot_choice = random.choice(["حجر", "ورقة", "مقص"])
 
-        # 5. رياضيات سريعة (حساب)
-        elif text == "حساب":
-            rem = self.check_cooldown(user_id, "حساب")
-            if rem > 0:
-                mins, secs = divmod(rem, 60)
-                return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للعب (رياضيات سريعة) مرة أخرى!", delete_after=5)
+            if choice == bot_choice:
+                res_text = f"🤝 اختيارك ({choice}) والبوت اختر ({bot_choice}) -> **تعادل تماماً!**"
+            elif (choice == "حجر" and bot_choice == "مقص") or (choice == "ورقة" and bot_choice == "حجر") or (choice == "مقص" and bot_choice == "ورقة"):
+                pts = add_points(guild_id, user_id, 60)
+                res_text = f"🎉 اختيارك ({choice}) والبوت اختر ({bot_choice}) -> **فزت بجدارة وربحت 60 نقطة!** (رصيدك: {pts})"
+            else:
+                res_text = f"❌ اختيارك ({choice}) والبوت اختر ({bot_choice}) -> **للأسف خسرت أمام ذكاء البوت!**"
 
-            n1, n2 = random.randint(1, 20), random.randint(1, 20)
-            op = random.choice(["+", "-"])
-            ans = n1 + n2 if op == "+" else n1 - n2
-            await message.channel.send(f"🧮 أوجد الناتج في الشات خلال 7 ثواني:\n**{n1} {op} {n2} = ؟**")
-            def check(m):
-                content = m.content.strip()
-                if content.lstrip("-").isdigit():
-                    return m.author.id == user_id and m.channel.id == channel_id
-                return False
-            try:
-                user_msg = await self.bot.wait_for("message", timeout=7.0, check=check)
-                if int(user_msg.content.strip()) == ans:
-                    pts = add_points(guild_id, user_id, 50)
-                    await message.channel.send(f"⚡ إجابة صحيحة يا {message.author.mention}! **ربحت 50 نقطة.** (رصيدك: {pts})")
-                else:
-                    await message.channel.send(f"❌ إجابة خاطئة! الناتج الصحيح هو `{ans}`.")
-            except asyncio.TimeoutError:
-                await message.channel.send(f"⌛ انتهى الوقت! الناتج الصحيح كان `{ans}`.")
+            try: await msg.edit(content=res_text, embed=None, view=None)
+            except: await message.channel.send(res_text)
+            return
 
-        # باقي الألعاب الـ 21 الأخرى (تفاعلية تتطلب اختيار كلمة أو حرف أسرع)
+        # 5. باقي الألعاب الـ 22 الأخرى (أصبحت تفاعلية تماماً بأزرار خيارات متعددة وأسئلة متنوعة تحمس الناس)
         elif text in [g["cmd"] for g in GAMES_LIST]:
-            game_name = next(g["name"] for g in GAMES_LIST if g["cmd"] == text)
+            game_obj = next(g for g in GAMES_LIST if g["cmd"] == text)
+            game_name = game_obj["name"]
             
             rem = self.check_cooldown(user_id, text)
             if rem > 0:
                 mins, secs = divmod(rem, 60)
                 return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للعب ({game_name}) مرة أخرى!", delete_after=5)
 
-            target_word = random.choice(["تحدي", "سرعة", "بطل", "ذكاء", "صقر", "قوة", "فوز"])
-            await message.channel.send(f"🕹️ تحدي **{game_name}** بدأ!\nاكتب الكلمة التالية بسرعة في الشات لتفوز: **`{target_word}`** (أمامك 8 ثواني)")
-            
-            def check(m):
-                return m.author.id == user_id and m.channel.id == channel_id and m.content.strip() == target_word
-            try:
-                await self.bot.wait_for("message", timeout=8.0, check=check)
-                reward = random.randint(30, 70)
+            # أسئلة وخيارات عشوائية حماسية تفاعلية لكل الألعاب
+            questions_bank = [
+                {"q": "ما هي عاصمة دولة فرنسا؟", "options": ["باريس", "لندن", "برلين", "روما"], "ans": "باريس"},
+                {"q": "كم عدد كواكب المجموعة الشمسية؟", "options": ["8 كواكب", "9 كواكب", "7 كواكب", "10 كواكب"], "ans": "8 كواكب"},
+                {"q": "ما هو الحيوان الملقب بسفينة الصحراء؟", "options": ["الجمل", "الحصان", "الفيل", "الأسد"], "ans": "الجمل"},
+                {"q": "في أي قارة تقع دولة اليابان؟", "options": ["آسيا", "أفريقيا", "أوروبا", "أمريكا"], "ans": "آسيا"},
+                {"q": "ما هو الناتج الصحيح للعملية: 5 × 8 ؟", "options": ["40", "45", "35", "50"], "ans": "40"}
+            ]
+            q_data = random.choice(questions_bank)
+            shuffled_opts = q_data["options"].copy()
+            random.shuffle(shuffled_opts)
+
+            view = GameChoiceView(shuffled_opts, user_id)
+            embed = discord.Embed(
+                title=f"🎮 تحدي المهارة: {game_name}",
+                description=f"يا {message.author.mention}! أجب عن السؤال التالي لاجتياز التحدي وربح النقاط:\n\n**❓ {q_data['q']}**",
+                color=discord.Color.teal()
+            )
+            msg = await message.channel.send(embed=embed, view=view)
+            await view.wait()
+
+            if view.value is None:
+                try: await msg.delete()
+                except: pass
+                return await message.channel.send(f"⌛ انتهى الوقت المخصص لتحدي {game_name} ولم تقم بالإجابة!")
+
+            if view.value == q_data["ans"]:
+                reward = random.randint(40, 90)
                 total = add_points(guild_id, user_id, reward)
-                await message.channel.send(f"🏆 بطل يا {message.author.mention}! كتبت الكلمة في الوقت المناسب وربحت **+{reward} نقطة**! رصيدك: `{total}`")
-            except asyncio.TimeoutError:
-                await message.channel.send(f"⌛ انتهى الوقت ولم تكتب الكلمة المطلوبة (`{target_word}`) بشكل صحيح!")
+                res_text = f"🏆 إجابة خارقة وصحيحة يا {message.author.mention}! اجتزت تحدي **{game_name}** بنجاح وربحت **+{reward} نقطة**! رصيدك الحالي: `{total}`"
+            else:
+                res_text = f"❌ إجابة خاطئة! الإجابة الصحيحة كانت: **{q_data['ans']}**. حظاً أوفر في المرات القادمة!"
+
+            try: await msg.edit(content=res_text, embed=None, view=None)
+            except: await message.channel.send(res_text)
+            return
 
 async def setup(bot):
     await bot.add_cog(InteractiveGamesCog(bot))
