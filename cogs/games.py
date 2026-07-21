@@ -111,11 +111,11 @@ class InteractiveGamesCog(commands.Cog):
         user_cooldowns[key] = now + timedelta(minutes=2)
         return 0
 
-    @commands.command(name="نقاط", aliases=["رصيدي", "البنك", "نقاطي"])
+    @commands.command(name="نقاط", aliases=["رصيدي", "البنك"])
     async def points_cmd(self, ctx, member: discord.Member = None):
         target = member or ctx.author
         pts = await get_user_points(ctx.guild.id, target.id)
-        await ctx.send(f"👤 العضو: {target.mention}\n💰 رصيدك الحالي: `{pts}` نقطة")
+        await ctx.send(f"👤 العضو: {target.mention}\n💰 رصيده الحالي: `{pts}` نقطة")
 
     @commands.command(name="العاب", aliases=["الالعاب"])
     async def games_cmd(self, ctx):
@@ -166,6 +166,9 @@ class InteractiveGamesCog(commands.Cog):
                       "• `اسعار` — لعرض أسعار الأغراض.\n"
                       "• `شراء` — لشراء الأغراض (مثال: شراء 1).\n"
                       "• `بيع` — لبيع أغراضك واسترداد النقاط (مثال: بيع سيف الأساطير).\n"
+                      "• `رصيد @الشخص` — لمعرفة رصيد أي عضو.\n"
+                      "• `تحويل @الشخص المبلغ` — لتحويل نقاط لعضو آخر.\n"
+                      "• `توب` — لعرض قائمة أفضل 10 لاعبين في السيرفر.\n"
                       "• `ممتلكات` أو `حقيبتي` — لعرض محتويات حقيبتك.",
                 inline=False
             )
@@ -248,26 +251,90 @@ class InteractiveGamesCog(commands.Cog):
             new_pts = await add_points(guild_id, user_id, refund)
             return await message.channel.send(f"✅ تم بيع الغرض بنجاح واسترداد **{refund} نقطة**! رصيدك الحالي: `{new_pts}`")
 
-        # 7. أمر إعطاء النقاط (خاص بمالك السيرفر)
-        if text.startswith("نقاط ") or text.startswith("!نقاط ") or text.startswith("/نقاط "):
-            if message.author.id != message.guild.owner_id:
-                return await message.channel.send("❌ هذا الأمر مخصص لمالك السيرفر فقط!", delete_after=5)
-            
+        # 7. نظام عرض رصيد الآخرين (مثال: رصيد @الشخص)
+        if text.startswith("رصيد ") or text.startswith("!رصيد "):
+            if message.mentions:
+                target_user = message.mentions[0]
+                pts = await get_user_points(guild_id, target_user.id)
+                return await message.channel.send(f"👤 العضو: {target_user.mention}\n💰 رصيده الحالي: `{pts}` نقطة")
+            else:
+                pts = await get_user_points(guild_id, user_id)
+                return await message.channel.send(f"👤 العضو: {message.author.mention}\n💰 رصيدك الحالي: `{pts}` نقطة")
+
+        # 8. نظام تحويل النقاط (مثال: تحويل @الشخص 100)
+        if text.startswith("تحويل ") or text.startswith("!تحويل "):
             parts = message.content.strip().split()
             if len(parts) < 3 or not message.mentions:
-                return await message.channel.send("❌ الاستخدام الصحيح: `نقاط @الشخص المبلغ`", delete_after=5)
+                return await message.channel.send("❌ الاستخدام الصحيح: `تحويل @الشخص المبلغ`", delete_after=5)
             
             target_user = message.mentions[0]
+            if target_user.id == user_id:
+                return await message.channel.send("❌ لا يمكنك تحويل النقاط لنفسك!", delete_after=5)
+            
             try:
                 amount = int(parts[2])
             except ValueError:
-                return await message.channel.send("❌ يرجى كتابة رقم صحيح للمبلغ.", delete_after=5)
+                return await message.channel.send("❌ يرجى كتابة رقم صحيح للمبلغ المراد تحويله.", delete_after=5)
+            
+            if amount <= 0:
+                return await message.channel.send("❌ لا يمكنك تحويل مبلغ سالب أو صفر!", delete_after=5)
+            
+            sender_pts = await get_user_points(guild_id, user_id)
+            if sender_pts < amount:
+                return await message.channel.send(f"❌ رصيدك غير كافٍ! رصيدك الحالي `{sender_pts}` نقطة.", delete_after=5)
+            
+            new_sender_pts = await add_points(guild_id, user_id, -amount)
+            new_target_pts = await add_points(guild_id, target_user.id, amount)
+            
+            return await message.channel.send(f"💸 تم تحويل **{amount}** نقطة بنجاح إلى {target_user.mention}!\n💰 رصيدك الجديد: `{new_sender_pts}` نقطة.")
+
+        # 9. أمر التوب (أفضل 10 لاعبين في السيرفر) بالعربي بالكامل
+        if text in ["توب", "!توب", "/توب"]:
+            cursor = users_collection.find({"guild_id": str(guild_id)}).sort("points", -1).limit(10)
+            top_users = await cursor.to_list(length=10)
+            
+            if not top_users:
+                return await message.channel.send("📊 لا توجد أي بيانات مسجلة للأعضاء حتى الآن!", delete_after=5)
+            
+            embed = discord.Embed(
+                title="🏆 لوحة المتصدرين (التوب) في السيرفر",
+                description="أفضل 10 لاعبين من حيث جمع النقاط:",
+                color=discord.Color.gold()
+            )
+            
+            medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+            desc_list = []
+            for i, doc in enumerate(top_users):
+                u_id = int(doc["user_id"])
+                pts = doc["points"]
+                user_obj = message.guild.get_member(u_id)
+                name = user_obj.mention if user_obj else f"مستخدم مغادر ({u_id})"
+                medal = medals[i] if i < len(medals) else f"{i+1}."
+                desc_list.append(f"{medal} {name} — **{pts}** نقطة")
+            
+            embed.add_field(name="✨ قائمة الأبطال", value="\n".join(desc_list), inline=False)
+            embed.set_footer(text=f"طلب بواسطة: {message.author.name}")
+            return await message.channel.send(embed=embed)
+
+        # 10. أمر إعطاء النقاط (خاص بك: يتيح إضافة رصيد لأي شخص أو حتى لنفسك)
+        if text.startswith("نقاط ") or text.startswith("!نقاط ") or text.startswith("/نقاط "):
+            parts = message.content.strip().split()
+            if len(parts) < 3:
+                return await message.channel.send("❌ الاستخدام الصحيح: `نقاط @الشخص المبلغ`", delete_after=5)
+            
+            # تحديد المستهدف (إذا تم المنشن يختار المعني، وإذا لم يمنشن أحداً تذهب لك أنت كصاحب الأمر)
+            target_user = message.mentions[0] if message.mentions else message.author
+            
+            try:
+                amount = int(parts[-1])
+            except ValueError:
+                return await message.channel.send("❌ يرجى كتابة رقم صحيح للمبلغ في نهاية الأمر.", delete_after=5)
             
             new_tot = await add_points(guild_id, target_user.id, amount)
             await message.channel.send(f"✅ تم إضافة **{amount}** نقطة بنجاح إلى {target_user.mention}!\nرصيده الحالي: `{new_tot}` نقطة.")
             return
 
-        # 8. حل مشكلة أمر النرد بـ منشن ومبلغ (مثال: نرد @شخص 50)
+        # 11. حل مشكلة أمر النرد بـ منشن ومبلغ (مثال: نرد @شخص 50)
         if text.startswith("نرد "):
             parts = message.content.strip().split()
             if message.mentions:
@@ -314,7 +381,7 @@ class InteractiveGamesCog(commands.Cog):
                     await message.channel.send(f"⌛ انتهى الوقت ولم يقبل {target_user.mention} التحدي.")
                 return
 
-        # 9. حل مشكلة أمر التحدي المباشر بين لاعبين
+        # 12. حل مشكلة أمر التحدي المباشر بين لاعبين
         if text.startswith("تحدي "):
             if message.mentions:
                 target_user = message.mentions[0]
@@ -404,7 +471,7 @@ class InteractiveGamesCog(commands.Cog):
             if view.value is None:
                 try: await msg.delete()
                 except: pass
-                return await message.channel.send("⌛ انتهى الوقت ولم تقم بالختيار!")
+                return await message.channel.send("⌛ انتهى الوقت ولم تقم بالاختيار!")
 
             roll = random.randint(1, 6)
             is_high = roll >= 4
@@ -442,7 +509,7 @@ class InteractiveGamesCog(commands.Cog):
             reward = random.choice([60, 120, -30, 180, 0, 90])
             pts = await add_points(guild_id, user_id, reward)
             if reward > 0:
-                res_text = f"✨ فتحت {view.value} ووجدات خلفه كنزاً بقيمة **+{reward} نقطة**! رصيدك: `{pts}`"
+                res_text = f"✨ فتحت {view.value} ووجدت خلفه كنزاً بقيمة **+{reward} نقطة**! رصيدك: `{pts}`"
             elif reward < 0:
                 res_text = f"💥 اصطدمت بفخ خلف {view.value} وخسرت **{reward} نقطة**! رصيدك: `{pts}`"
             else:
@@ -468,7 +535,7 @@ class InteractiveGamesCog(commands.Cog):
             if view.value is None:
                 try: await msg.delete()
                 except: pass
-                return await message.channel.send("⌛ انتهى الوقت ولمختر خيارك!")
+                return await message.channel.send("⌛ انتهى الوقت ولم تختر خيارك!")
 
             choice = "حجر" if "حجر" in view.value else ("ورقة" if "ورقة" in view.value else "مقص")
             bot_choice = random.choice(["حجر", "ورقة", "مقص"])
