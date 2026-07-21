@@ -1,9 +1,19 @@
 import os
-import sqlite3
 import discord
 from discord.ext import commands
 from flask import Flask
 from threading import Thread
+from pymongo import MongoClient
+
+# --- الاتصال بقاعدة بيانات MongoDB السحابية ---
+MONGO_URL = os.getenv("MONGO_URL")
+if not MONGO_URL:
+    print("خطأ: رابط MONGO_URL غير موجود في إعدادات البيئة!")
+
+client = MongoClient(MONGO_URL)
+db = client["discord_bot_db"]
+users_collection = db["users"]
+config_collection = db["config"]
 
 # --- إعداد سيرفر الـ Flask الوهمي لمنع Port Timeout ---
 app = Flask('')
@@ -47,102 +57,58 @@ class MyBot(commands.Bot):
             print(f"فشل تحميل ملف games: {e}")
 
     async def on_ready(self):
-        # --- التأكد من تهيئة قاعدة البيانات عند بدء التشغيل دون حذف البيانات القديمة ---
-        init_db()
-        print(f"البوت جاهز ومتصل بقاعدة البيانات المحلية باسم: {self.user}")
+        print(f"البوت جاهز ومتصل بقاعدة بيانات MongoDB السحابية باسم: {self.user}")
 
 bot = MyBot()
 
-DB_FILE = "database.db"
-
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            guild_id TEXT,
-            user_id TEXT,
-            joins INTEGER DEFAULT 0,
-            leaves INTEGER DEFAULT 0,
-            points INTEGER DEFAULT 0,
-            checkins_count INTEGER DEFAULT 0,
-            manual_leaves_count INTEGER DEFAULT 0,
-            last_checkin TEXT DEFAULT "",
-            last_leave TEXT DEFAULT "",
-            PRIMARY KEY (guild_id, user_id)
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS config (
-            guild_id TEXT PRIMARY KEY,
-            welcome_channel INTEGER,
-            leave_channel INTEGER,
-            games_channel INTEGER,
-            records_channel INTEGER,
-            top_channel INTEGER
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-init_db()
-
 def get_user_data(guild_id, user_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT joins, leaves, points, checkins_count, manual_leaves_count, last_checkin, last_leave FROM users WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
-    row = cursor.fetchone()
-    if not row:
-        cursor.execute("INSERT OR IGNORE INTO users (guild_id, user_id, joins, leaves, points, checkins_count, manual_leaves_count, last_checkin, last_leave) VALUES (?, ?, 0, 0, 0, 0, 0, '', '')", (str(guild_id), str(user_id)))
-        conn.commit()
-        data = {"joins": 0, "leaves": 0, "points": 0, "checkins_count": 0, "manual_leaves_count": 0, "last_checkin": "", "last_leave": ""}
-    else:
+    query = {"guild_id": str(guild_id), "user_id": str(user_id)}
+    data = users_collection.find_one(query)
+    if not data:
         data = {
-            "joins": row[0], "leaves": row[1], "points": row[2],
-            "checkins_count": row[3], "manual_leaves_count": row[4],
-            "last_checkin": row[5], "last_leave": row[6]
+            "guild_id": str(guild_id),
+            "user_id": str(user_id),
+            "joins": 0,
+            "leaves": 0,
+            "points": 0,
+            "checkins_count": 0,
+            "manual_leaves_count": 0,
+            "last_checkin": "",
+            "last_leave": ""
         }
-    conn.close()
+        users_collection.insert_one(data)
     return data
 
 def update_user_data(guild_id, user_id, **kwargs):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    query = {"guild_id": str(guild_id), "user_id": str(user_id)}
     get_user_data(guild_id, user_id)
-    for key, val in kwargs.items():
-        cursor.execute(f"UPDATE users SET {key} = ? WHERE guild_id = ? AND user_id = ?", (val, str(guild_id), str(user_id)))
-    conn.commit()
-    conn.close()
+    users_collection.update_one(query, {"$set": kwargs})
 
 def get_config(guild_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT welcome_channel, leave_channel, games_channel, records_channel, top_channel FROM config WHERE guild_id = ?", (str(guild_id),))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
+    config = config_collection.find_one({"guild_id": str(guild_id)})
+    if config:
         return {
-            "welcome_channel": row[0],
-            "leave_channel": row[1],
-            "games_channel": row[2],
-            "records_channel": row[3],
-            "top_channel": row[4]
+            "welcome_channel": config.get("welcome_channel"),
+            "leave_channel": config.get("leave_channel"),
+            "games_channel": config.get("games_channel"),
+            "records_channel": config.get("records_channel"),
+            "top_channel": config.get("top_channel")
         }
     return {}
 
 def save_config_key(guild_id, key, value):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(f"INSERT INTO config (guild_id, {key}) VALUES (?, ?) ON CONFLICT(guild_id) DO UPDATE SET {key} = ?", (str(guild_id), value, value))
-    conn.commit()
-    conn.close()
+    config_collection.update_one(
+        {"guild_id": str(guild_id)},
+        {"$set": {key: value}},
+        upsert=True
+    )
 
 @bot.event
 async def on_member_join(member):
     guild_id = str(member.guild.id)
     user_id = str(member.id)
     data = get_user_data(guild_id, user_id)
-    new_joins = data["joins"] + 1
+    new_joins = data.get("joins", 0) + 1
     update_user_data(guild_id, user_id, joins=new_joins)
 
     config = get_config(guild_id)
@@ -157,7 +123,7 @@ async def on_member_remove(member):
     guild_id = str(member.guild.id)
     user_id = str(member.id)
     data = get_user_data(guild_id, user_id)
-    new_leaves = data["leaves"] + 1
+    new_leaves = data.get("leaves", 0) + 1
     update_user_data(guild_id, user_id, leaves=new_leaves)
 
     config = get_config(guild_id)
@@ -210,18 +176,14 @@ async def on_message(message):
 
     if text_lower == "نقاطي":
         data = get_user_data(guild_id, user_id)
-        await message.channel.send(f"💰 رصيدك الحالي يا {message.author.mention}: **{data['points']}** نقطة.")
+        await message.channel.send(f"💰 رصيدك الحالي يا {message.author.mention}: **{data.get('points', 0)}** نقطة.")
 
     elif text_lower in ["tوب", "!top", "top"]:
         if config.get("top_channel") and message.channel.id != config["top_channel"]:
             await message.delete()
             return
 
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, points FROM users WHERE guild_id = ? ORDER BY points DESC LIMIT 10", (guild_id,))
-        top_users = cursor.fetchall()
-        conn.close()
+        top_users = list(users_collection.find({"guild_id": guild_id}).sort("points", -1).limit(10))
 
         embed = discord.Embed(title="🏆 قائمة لوحة الشرف (Top 10)", description="أكثر الأعضاء جمعاً للنقاط في السيرفر:", color=discord.Color.gold())
         
@@ -230,7 +192,9 @@ async def on_message(message):
         else:
             description_lines = []
             medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-            for index, (u_id, pts) in enumerate(top_users):
+            for index, user_doc in enumerate(top_users):
+                u_id = user_doc.get("user_id")
+                pts = user_doc.get("points", 0)
                 member = message.guild.get_member(int(u_id))
                 name = member.display_name if member else f"مغادر ({u_id})"
                 medal = medals[index] if index < len(medals) else f"•"
@@ -239,7 +203,6 @@ async def on_message(message):
 
         await message.channel.send(embed=embed)
 
-    # الأهم: هذا السطر هو الذي يجبر البوت على إرسال الرسائل لملفات الـ Cogs لتشغيل الألعاب
     await bot.process_commands(message)
 
 if __name__ == "__main__":
