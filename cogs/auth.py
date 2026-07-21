@@ -1,114 +1,99 @@
 import discord
 from discord.ext import commands
-import sqlite3
+import os
+from pymongo import MongoClient
 from datetime import datetime
 
-DB_FILE = "database.db"
+# --- الاتصال بقاعدة البيانات السحابية MongoDB الموحدة ---
+MONGO_URL = os.getenv("MONGO_URL")
+db = None
+users_collection = None
+auth_logs_collection = None
+user_status_collection = None
+
+if MONGO_URL:
+    try:
+        client = MongoClient(MONGO_URL)
+        db = client["discord_bot_db"]
+        users_collection = db["users"]
+        auth_logs_collection = db["auth_logs"]
+        user_status_collection = db["user_status"]
+    except Exception as e:
+        print(f"Error connecting to MongoDB in auth_cog.py: {e}")
 
 def init_auth_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS auth_logs (
-            guild_id TEXT,
-            user_id TEXT,
-            action TEXT,
-            timestamp TEXT
-        )
-    """)
-    # توحيد جدول النقاط مع جدول الألعاب لضمان عدم ضياعها
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            guild_id TEXT,
-            user_id TEXT,
-            points INTEGER,
-            PRIMARY KEY (guild_id, user_id)
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_status (
-            guild_id TEXT,
-            user_id TEXT,
-            last_action TEXT,
-            PRIMARY KEY (guild_id, user_id)
-        )
-    """)
-    conn.commit()
-    conn.close()
+    # تم إبقاء هذه الدالة لتتوافق مع هيكلة كودك الأصلي بدون حذفها
+    pass
 
 init_auth_db()
 
 def get_user_data(guild_id, user_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT points FROM users WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
-    row = cursor.fetchone()
-    if not row:
-        cursor.execute("INSERT OR IGNORE INTO users (guild_id, user_id, points) VALUES (?, ?, 0)", (str(guild_id), str(user_id)))
-        conn.commit()
-        points = 0
-    else:
-        points = row[0]
-    conn.close()
-    return points
+    if users_collection is None:
+        return 0
+    query = {"guild_id": str(guild_id), "user_id": str(user_id)}
+    doc = users_collection.find_one(query)
+    if not doc:
+        users_collection.insert_one({
+            "guild_id": str(guild_id),
+            "user_id": str(user_id),
+            "points": 0
+        })
+        return 0
+    return doc.get("points", 0)
 
 def add_points(guild_id, user_id, amount):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    if users_collection is None:
+        return 0
     current = get_user_data(guild_id, user_id)
     new_points = current + amount
-    cursor.execute("UPDATE users SET points = ? WHERE guild_id = ? AND user_id = ?", (new_points, str(guild_id), str(user_id)))
-    conn.commit()
-    conn.close()
+    query = {"guild_id": str(guild_id), "user_id": str(user_id)}
+    users_collection.update_one(
+        query,
+        {"$set": {"points": new_points}},
+        upsert=True
+    )
     return new_points
 
 def get_user_status(guild_id, user_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT last_action FROM user_status WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return row[0]
+    if user_status_collection is None:
+        return None
+    query = {"guild_id": str(guild_id), "user_id": str(user_id)}
+    doc = user_status_collection.find_one(query)
+    if doc:
+        return doc.get("last_action")
     return None
 
 def update_user_status(guild_id, user_id, action):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    if user_status_collection is not None:
+        # تحديث آخر حركة للمستخدم في MongoDB
+        user_status_collection.update_one(
+            {"guild_id": str(guild_id), "user_id": str(user_id)},
+            {"$set": {"last_action": action}},
+            upsert=True
+        )
     
-    # تحديث آخر حركة للمستخدم
-    cursor.execute("""
-        INSERT INTO user_status (guild_id, user_id, last_action)
-        VALUES (?, ?, ?)
-        ON CONFLICT(guild_id, user_id) 
-        DO UPDATE SET last_action = ?
-    """, (str(guild_id), str(user_id), action, action))
-    
-    # تسجيل الحركة في السجلات
-    now_str = datetime.now().isoformat()
-    cursor.execute("""
-        INSERT INTO auth_logs (guild_id, user_id, action, timestamp)
-        VALUES (?, ?, ?, ?)
-    """, (str(guild_id), str(user_id), action, now_str))
-    
-    conn.commit()
-    conn.close()
+    if auth_logs_collection is not None:
+        # تسجيل الحركة في السجلات السحابية
+        now_str = datetime.now().isoformat()
+        auth_logs_collection.insert_one({
+            "guild_id": str(guild_id),
+            "user_id": str(user_id),
+            "action": action,
+            "timestamp": now_str
+        })
 
 def get_user_stats(guild_id, user_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT action, COUNT(*) FROM auth_logs
-        WHERE guild_id = ? AND user_id = ?
-        GROUP BY action
-    """, (str(guild_id), str(user_id)))
-    rows = cursor.fetchall()
-    conn.close()
-    
     stats = {"دخول": 0, "خروج": 0}
-    for action, count in rows:
+    if auth_logs_collection is None:
+        return stats
+    
+    query = {"guild_id": str(guild_id), "user_id": str(user_id)}
+    logs = auth_logs_collection.find(query)
+    for log in logs:
+        action = log.get("action")
         if action in stats:
-            stats[action] = count
+            stats[action] += 1
+            
     return stats
 
 class AuthCog(commands.Cog):
