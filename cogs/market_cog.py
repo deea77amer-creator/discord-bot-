@@ -203,8 +203,8 @@ class MarketCog(commands.Cog):
             new_tot = add_points(guild_id, target_user.id, amount)
             return await message.channel.send(f"✅ تم إضافة **{amount}** نقطة بنجاح إلى {target_user.mention}!\nرصيده الحالي: `{new_tot}` نقطة.")
 
-        # 1. نظام النقاط ورصيد المستخدم أو منشن شخص
-        if text.startswith("نقاط") or text.startswith("!نقاط") or text.startswith("البنك") or text.startswith("رصيدي"):
+        # 1. نظام الرصيد الموحد (أمر رصيد فقط لعرض النقاط لنفسك أو لمنشن شخص)
+        if text.startswith("رصيد") or text.startswith("!رصيد"):
             target = message.mentions[0] if message.mentions else message.author
             pts = get_user_points(guild_id, target.id)
             return await message.channel.send(f"👤 العضو: {target.mention}\n💰 رصيدك الحالي: `{pts}` نقطة")
