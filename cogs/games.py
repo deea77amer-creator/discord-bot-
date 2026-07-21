@@ -16,7 +16,7 @@ inventory_collection = db["inventory"]
 # تتبع وقت الانتظار (Cooldown)
 user_cooldowns = {}
 
-# مؤقت وقت تحديث قائمة الأسعار (يتحدث تلقائياً كل ساعة بناءً على الوقت الفعلي)
+# مؤقت وقت تحديث قائمة الأسعار (يتحدث تلقائياً بناءً على الوقت الفعلي)
 LAST_SHOP_UPDATE = datetime.now()
 
 async def get_user_points(guild_id, user_id):
@@ -237,7 +237,7 @@ class InteractiveGamesCog(commands.Cog):
             embed.add_field(
                 name="🎲 الألعاب والمتجر",
                 value="• `العاب` — لعرض قائمة الـ 26 لعبة.\n"
-                      "• `اسعار` أو `مزاد` — لعرض أسعار الأغراض.\n"
+                      "• `اسعار` أو `مزاد` — لعرض أسعار الأغراض مع مؤقت التحديث التلقائي.\n"
                       "• `شراء` — لفتح قائمة المزاد التفاعلية لاختيار المنتج والكمية وتأكيد الشراء.\n"
                       "• `بيع` — لبيع أغراضك واسترداد النقاط.\n"
                       "• `رصيد` (أو `رصيد @الشخص`) — لمعرفة رصيد النقاط بكل السيرفر.\n"
@@ -267,10 +267,9 @@ class InteractiveGamesCog(commands.Cog):
             await message.channel.send(embed=embed)
             return
 
-        # 3. نظام الأسعار والمزاد (تحديث تلقائي للأسعار والمؤقت برمجياً)
+        # 3. نظام الأسعار والمزاد (تحديث تلقائي عشوائي للأسعار مع المؤقت)
         if first_word in ["اسعار", "مزاد"]:
             global LAST_SHOP_UPDATE
-            # تحديث وقت ومحتوى الأسعار تلقائياً عند كل طلب لتتغير وحدها
             LAST_SHOP_UPDATE = datetime.now()
             for k in SHOP_ITEMS:
                 SHOP_ITEMS[k]["price"] = random.randint(40, 350)
