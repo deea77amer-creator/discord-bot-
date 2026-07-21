@@ -99,6 +99,10 @@ class InteractiveGamesCog(commands.Cog):
         user_id = message.author.id
         channel_id = message.channel.id
 
+        # التحقق الحصري من أن جميع الأوامر تعمل فقط في القناة المحددة
+        if channel_id != self.target_channel_id:
+            return
+
         # تهيئة قاعدة بيانات الحقيبة والممتلكات إن لم تكن موجودة
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
@@ -128,9 +132,6 @@ class InteractiveGamesCog(commands.Cog):
 
         # 2. قائمة الـ 26 لعبة
         if text in ["العاب", "!العاب", "/العاب"]:
-            if channel_id != self.target_channel_id:
-                return await message.channel.send(f"❌ عذراً، ألعاب السيرفر مخصصة فقط في القناة المحددة!", delete_after=5)
-            
             embed = discord.Embed(
                 title="🎮 الألعاب والأنظمة التفاعلية (26 لعبة باللغة العربية)",
                 description="كل لعبة تفاعلية تتطلب منك الخيار ولكل لعبة وقت انتظار دقيقتين:",
@@ -237,10 +238,6 @@ class InteractiveGamesCog(commands.Cog):
             await message.channel.send(f"✅ تم إضافة **{amount}** نقطة بنجاح إلى {target_user.mention}!\nرصيده الحالي: `{new_tot}` نقطة.")
             return
 
-        # 8. التحقق من قناة الألعاب للبدء بالألعاب التفاعلية الحقيقية
-        if channel_id != self.target_channel_id:
-            return
-
         # --- تفاعلات الألعاب الحقيقية التي تتطلب اختيارك وتفاعلك مع وقت انتظار دقيقتين لكل لعبة ---
         
         # 1. لعبة النرد السريع (تفاعلية باختيار اتجاه النرد أو التوقع)
@@ -269,7 +266,7 @@ class InteractiveGamesCog(commands.Cog):
                 await message.channel.send(f"⌛ انتهى الوقت ولم تقم باختيار التوقع!")
 
         # 2. لعبة الحظ أو الروليت (تفاعلية باختيار باب الكنز)
-        if text in ["حظ", "روليت"]:
+        elif text in ["حظ", "روليت"]:
             rem = self.check_cooldown(user_id, "حظ")
             if rem > 0:
                 mins, secs = divmod(rem, 60)
@@ -289,7 +286,7 @@ class InteractiveGamesCog(commands.Cog):
                 else:
                     await message.channel.send(f"💨 الباب كان فارغاً! لم تربح ولم تخسر.")
             except asyncio.TimeoutError:
-                await message.channel.send(f"⌛ انتهى الوقت ولمختر الباب المناسب!")
+                await message.channel.send(f"⌛ انتهى الوقت ولم تختر الباب المناسب!")
 
         # 3. حجرة ورقة مقص
         elif text in ["مقص", "حجر ورقة مقص"]:
