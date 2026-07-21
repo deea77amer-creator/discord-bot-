@@ -5,6 +5,9 @@ from flask import Flask
 from threading import Thread
 from pymongo import MongoClient
 
+# استيراد الأوامر التي أعددناها سابقاً
+from bot.commands import setup_commands
+
 # --- إعداد سيرفر الـ Flask الوهمي لمنع Port Timeout ---
 app = Flask('')
 
@@ -29,6 +32,10 @@ class MyBot(commands.Bot):
         super().__init__(command_prefix="", intents=intents)
 
     async def setup_hook(self):
+        # تفعيل وتشغيل الأوامر الخارجية التي أرسلتها
+        await setup_commands(self)
+        print("تم تفعيل وتثبيت جميع الأوامر الخارجية بنجاح!")
+
         # تحميل الملفات تلقائياً من مجلد cogs إن وجد
         if os.path.exists('./cogs'):
             for filename in os.listdir('./cogs'):
@@ -40,14 +47,13 @@ class MyBot(commands.Bot):
                     except commands.errors.ExtensionAlreadyLoaded:
                         pass
 
-        # تحميل الملفات من مجلد الألعاب bot/games تلقائياً (بدون حذف أي لعبة أو سوق)
+        # تحميل الملفات من مجلد الألعاب bot/games تلقائياً
         games_paths = ['./bot/games', './games']
         loaded_games = False
         for path in games_paths:
             if os.path.exists(path):
                 for filename in os.listdir(path):
                     if filename.endswith('.py'):
-                        # استخراج المسار الصحيح للـ Cog (مثل bot.games.market أو games.market)
                         prefix = path.replace('./', '').replace('/', '.')
                         cog_name = f"{prefix}.{filename[:-3]}"
                         try:
