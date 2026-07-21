@@ -71,7 +71,7 @@ else:
 
 def get_user_data(guild_id, user_id):
     if users_collection is None:
-        return {"joins": 0, "leaves": 0, "points": 0, "checkins_count": 0, "manual_leaves_count": 0, "last_checkin": "", "last_leave": ""}
+        return {"guild_id": str(guild_id), "user_id": str(user_id), "joins": 0, "leaves": 0, "points": 0, "checkins_count": 0, "manual_leaves_count": 0, "last_checkin": "", "last_leave": ""}
     
     query = {"guild_id": str(guild_id), "user_id": str(user_id)}
     data = users_collection.find_one(query)
@@ -93,7 +93,7 @@ def update_user_data(guild_id, user_id, **kwargs):
         return
     get_user_data(guild_id, user_id)
     query = {"guild_id": str(guild_id), "user_id": str(user_id)}
-    users_collection.update_one(query, {"$set": kwargs})
+    users_collection.update_one(query, {"$set": kwargs}, upsert=True)
 
 def get_config(guild_id):
     if config_collection is None:
@@ -178,7 +178,7 @@ async def set_top(ctx):
     save_config_key(ctx.guild.id, "top_channel", ctx.channel.id)
     await ctx.send("✅ تم تعيين قناة **التوب** بنجاح!")
 
-# --- أمر نقاطي (تم تحويله لأمر رسمي صحيح) ---
+# --- أمر نقاطي (مرتبط بشكل دقيق برقم السيرفر والمستخدم) ---
 @bot.command(name="نقاطي")
 async def my_points(ctx):
     if not ctx.guild:
@@ -188,7 +188,7 @@ async def my_points(ctx):
     data = get_user_data(guild_id, user_id)
     await ctx.send(f"💰 رصيدك الحالي يا {ctx.author.mention}: **{data.get('points', 0)}** نقطة.")
 
-# --- أمر التوب (تم تحويله لأمر رسمي مع دعم الاختصارات) ---
+# --- أمر التوب (مرتبط بسيرفرك الحالي حصرياً) ---
 @bot.command(name="top", aliases=["tوب", "التوب"])
 async def leaderboard(ctx):
     if not ctx.guild:
@@ -227,7 +227,7 @@ async def on_message(message):
     if message.author.bot or not message.guild:
         return
     
-    # معالجة بقية الأوامر والـ Cogs والألعاب
+    # معالجة بقية الأوامر والملفات الخارجية بدون تكرار
     await bot.process_commands(message)
 
 if __name__ == "__main__":
