@@ -8,4 +8,3 @@ db = client[DATABASE_NAME]
 async def get_database():
     """إرجاع كائن قاعدة البيانات للاستخدام في باقي الملفات"""
     return db
-
