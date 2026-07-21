@@ -2,47 +2,22 @@ import discord
 from discord.ext import commands
 import random
 import asyncio
-import sqlite3
 import os
-import shutil
 from datetime import datetime, timedelta
+from pymongo import MongoClient
 
-DB_FILE = "database.db"
-BACKUP_FILE = "database_backup.db"
+# --- الاتصال بقاعدة البيانات السحابية MongoDB الموحدة ---
+MONGO_URL = os.getenv("MONGO_URL")
+db = None
+users_collection = None
 
-# دالة لعمل نسخة احتياطية من قاعدة البيانات لضمان عدم ضياع النقاط نهائياً
-def backup_db():
-    if os.path.exists(DB_FILE):
-        try:
-            shutil.copyfile(DB_FILE, BACKUP_FILE)
-        except Exception:
-            pass
-
-# دالة لضمان إنشاء جدول المستخدمين تلقائياً وحفظ النقاط وعدم تصفيرها
-def init_db():
-    # إذا كانت قاعدة البيانات الأساسية غير موجودة ولكن النسخة الاحتياطية موجودة، نقوم استرجاعها تلقائياً!
-    if not os.path.exists(DB_FILE) and os.path.exists(BACKUP_FILE):
-        try:
-            shutil.copyfile(BACKUP_FILE, DB_FILE)
-        except Exception:
-            pass
-
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            guild_id TEXT,
-            user_id TEXT,
-            points INTEGER DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id)
-        )
-    ''')
-    conn.commit()
-    conn.close()
-    backup_db()
-
-# تشغيل دالة إنشاء النسخة الاحتياطية والجدول فور قراءة الملف
-init_db()
+if MONGO_URL:
+    try:
+        client = MongoClient(MONGO_URL)
+        db = client["discord_bot_db"]
+        users_collection = db["users"]
+    except Exception as e:
+        print(f"Error connecting to MongoDB in games.py: {e}")
 
 # قاموس لتتبع وقت آخر تداول واستثمار وباقي الأوامر لكل مستخدم (Cooldown: دقيقتين)
 market_cooldowns = {}
@@ -67,31 +42,39 @@ def update_dynamic_prices():
         last_price_update = datetime.now()
 
 def get_user_points(guild_id, user_id):
-    if not os.path.exists(DB_FILE):
+    if users_collection is None:
         return 0
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT points FROM users WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else 0
+    query = {"guild_id": str(guild_id), "user_id": str(user_id)}
+    doc = users_collection.find_one(query)
+    if doc:
+        return doc.get("points", 0)
+    return 0
 
 def add_points(guild_id, user_id, amount):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT points FROM users WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
-    row = cursor.fetchone()
-    if not row:
-        cursor.execute("INSERT OR IGNORE INTO users (guild_id, user_id, points) VALUES (?, ?, ?)", (str(guild_id), str(user_id), max(0, amount)))
+    if users_collection is None:
+        return 0
+    query = {"guild_id": str(guild_id), "user_id": str(user_id)}
+    doc = users_collection.find_one(query)
+    
+    if not doc:
+        new_pts = max(0, amount)
+        users_collection.insert_one({
+            "guild_id": str(guild_id),
+            "user_id": str(user_id),
+            "points": new_pts,
+            "joins": 0,
+            "leaves": 0,
+            "checkins_count": 0,
+            "manual_leaves_count": 0,
+            "last_checkin": "",
+            "last_leave": ""
+        })
+        return new_pts
     else:
-        new_pts = max(0, row[0] + amount)
-        cursor.execute("UPDATE users SET points = ? WHERE guild_id = ? AND user_id = ?", (new_pts, str(guild_id), str(user_id)))
-    conn.commit()
-    cursor.execute("SELECT points FROM users WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
-    res = cursor.fetchone()[0]
-    conn.close()
-    backup_db() # تحديث النسخة الاحتياطية فور تغير النقاط
-    return res
+        current_pts = doc.get("points", 0)
+        new_pts = max(0, current_pts + amount)
+        users_collection.update_one(query, {"$set": {"points": new_pts}})
+        return new_pts
 
 TRADING_COUNTRIES = [
     {"name": "أمريكا", "emoji": "🇺🇸", "desc": "سوق وول ستريت"},
@@ -175,7 +158,6 @@ class MarketCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.target_channel_id = 1528917497246515221
-        init_db()
 
     def set_cooldown(self, user_id, action_type):
         market_cooldowns[(user_id, action_type)] = datetime.now() + timedelta(minutes=2)
