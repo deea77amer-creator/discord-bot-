@@ -2,75 +2,39 @@ import discord
 from discord.ext import commands
 import random
 import asyncio
-import sqlite3
 import os
-import shutil
 from datetime import datetime, timedelta
+from motor.motor_asyncio import AsyncIOMotorClient
 
-DB_FILE = "database.db"
-BACKUP_FILE = "database_backup.db"
+# رابط الاتصال بقاعدة بيانات MongoDB (يمكنك استبداله برابط المنصة الخاص بك)
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+db_client = AsyncIOMotorClient(MONGO_URI)
+db = db_client["discord_bot_db"]
+users_collection = db["users"]
+inventory_collection = db["inventory"]
 
-# دالة لعمل نسخة احتياطية من قاعدة البيانات لضمان عدم ضياع النقاط نهائياً
-def backup_db():
-    if os.path.exists(DB_FILE):
-        try:
-            shutil.copyfile(DB_FILE, BACKUP_FILE)
-        except Exception:
-            pass
-
-def init_db():
-    if not os.path.exists(DB_FILE) and os.path.exists(BACKUP_FILE):
-        try:
-            shutil.copyfile(BACKUP_FILE, DB_FILE)
-        except Exception:
-            pass
-
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            guild_id TEXT,
-            user_id TEXT,
-            points INTEGER DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id)
-        )
-    ''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS inventory (guild_id TEXT, user_id TEXT, item_name TEXT)''')
-    conn.commit()
-    conn.close()
-    backup_db()
-
-init_db()
-
-# قاموس لتتبع وقت آخر لعب لكل مستخدم لكل لعبة (Cooldown: دقيقتين)
+# تتبع وقت الانتظار (Cooldown)
 user_cooldowns = {}
 
-def get_user_points(guild_id, user_id):
-    if not os.path.exists(DB_FILE):
-        return 0
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT points FROM users WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else 0
+async def get_user_points(guild_id, user_id):
+    doc = await users_collection.find_one({"guild_id": str(guild_id), "user_id": str(user_id)})
+    return doc["points"] if doc else 0
 
-def add_points(guild_id, user_id, amount):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT points FROM users WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
-    row = cursor.fetchone()
-    if not row:
-        cursor.execute("INSERT OR IGNORE INTO users (guild_id, user_id, points) VALUES (?, ?, ?)", (str(guild_id), str(user_id), max(0, amount)))
+async def add_points(guild_id, user_id, amount):
+    g_id = str(guild_id)
+    u_id = str(user_id)
+    doc = await users_collection.find_one({"guild_id": g_id, "user_id": u_id})
+    
+    if not doc:
+        new_pts = max(0, amount)
+        await users_collection.insert_one({"guild_id": g_id, "user_id": u_id, "points": new_pts})
     else:
-        new_pts = max(0, row[0] + amount)
-        cursor.execute("UPDATE users SET points = ? WHERE guild_id = ? AND user_id = ?", (new_pts, str(guild_id), str(user_id)))
-    conn.commit()
-    cursor.execute("SELECT points FROM users WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
-    res = cursor.fetchone()[0]
-    conn.close()
-    backup_db()
-    return res
+        new_pts = max(0, doc["points"] + amount)
+        await users_collection.update_one(
+            {"guild_id": g_id, "user_id": u_id},
+            {"$set": {"points": new_pts}}
+        )
+    return new_pts
 
 # جدول المنتجات في المتجر
 SHOP_ITEMS = {
@@ -108,7 +72,6 @@ GAMES_LIST = [
     {"name": "حرب الكلمات المشتعلة", "cmd": "حرب", "desc": "تحدي جماعي حماسي"}
 ]
 
-# أزرار تفاعلية للألعاب لاختيار الخيارات (A, B, C, D) بدلاً من الكتابة وحدها
 class GameChoiceView(discord.ui.View):
     def __init__(self, options, author_id):
         super().__init__(timeout=15.0)
@@ -147,6 +110,35 @@ class InteractiveGamesCog(commands.Cog):
                 return remaining
         user_cooldowns[key] = now + timedelta(minutes=2)
         return 0
+
+    @commands.command(name="نقاط", aliases=["رصيدي", "البنك", "نقاطي"])
+    async def points_cmd(self, ctx, member: discord.Member = None):
+        target = member or ctx.author
+        pts = await get_user_points(ctx.guild.id, target.id)
+        await ctx.send(f"👤 العضو: {target.mention}\n💰 رصيدك الحالي: `{pts}` نقطة")
+
+    @commands.command(name="العاب", aliases=["الالعاب"])
+    async def games_cmd(self, ctx):
+        embed = discord.Embed(
+            title="🎮 الألعاب والأنظمة التفاعلية (26 لعبة باللغة العربية)",
+            description="كل لعبة تفاعلية تتطلب خيارات وأزرار حماسية لكل لعبة وقت انتظار دقيقتين:",
+            color=discord.Color.gold()
+        )
+        part1 = "\n".join([f"{i+1}️⃣ **{g['name']}**: `{g['cmd']}`" for i, g in enumerate(GAMES_LIST[:13])])
+        part2 = "\n".join([f"{i+14}️⃣ **{g['name']}**: `{g['cmd']}`" for i, g in enumerate(GAMES_LIST[13:])])
+        
+        embed.add_field(name="📋 الألعاب (1 - 13)", value=part1, inline=True)
+        embed.add_field(name="📋 الألعاب (14 - 26)", value=part2, inline=True)
+        embed.set_footer(text="اكتب اسم اللعبة للبدء فوراً!")
+        await ctx.send(embed=embed)
+
+    @commands.command(name="اسعار", aliases=["الاسعار"])
+    async def prices_cmd(self, ctx):
+        embed = discord.Embed(title="🛒 قائمة أسعار المتجر", color=discord.Color.green())
+        for k, v in SHOP_ITEMS.items():
+            embed.add_field(name=f"{k}. {v['name']}", value=f"السعر: **{v['price']}** نقطة\nالوصف: {v['desc']}", inline=False)
+        embed.set_footer(text="لشراء غرض اكتب: شراء [رقم الغرض] (مثال: شراء 1)")
+        await ctx.send(embed=embed)
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -203,7 +195,8 @@ class InteractiveGamesCog(commands.Cog):
             for k, v in SHOP_ITEMS.items():
                 embed.add_field(name=f"{k}. {v['name']}", value=f"السعر: **{v['price']}** نقطة\nالوصف: {v['desc']}", inline=False)
             embed.set_footer(text="لشراء غرض اكتب: شراء [رقم الغرض] (مثال: شراء 1)")
-            return await message.channel.send(embed=embed)
+            await message.channel.send(embed=embed)
+            return
 
         # 4. نظام الشراء التفاعلي (مثال: شراء 1)
         if text.startswith("شراء ") or text.startswith("!شراء "):
@@ -213,33 +206,26 @@ class InteractiveGamesCog(commands.Cog):
             
             item_key = parts[1]
             item = SHOP_ITEMS[item_key]
-            current_pts = get_user_points(guild_id, user_id)
+            current_pts = await get_user_points(guild_id, user_id)
             
             if current_pts < item["price"]:
                 return await message.channel.send(f"❌ لا توجد نقاط كافية لديك! رصيدك `{current_pts}` وتحتاج إلى `{item['price']}` نقطة.", delete_after=5)
             
-            add_points(guild_id, user_id, -item["price"])
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO inventory (guild_id, user_id, item_name) VALUES (?, ?, ?)", (str(guild_id), str(user_id), item["name"]))
-            conn.commit()
-            conn.close()
+            await add_points(guild_id, user_id, -item["price"])
+            await inventory_collection.insert_one({"guild_id": str(guild_id), "user_id": str(user_id), "item_name": item["name"]})
             return await message.channel.send(f"✅ مبروك يا {message.author.mention}! اشتريت **{item['name']}** بنجاح مقابل `{item['price']}` نقطة!")
 
         # 5. نظام الممتلكات / الحقيبة
         if text in ["ممتلكات", "حقيبتي", "!حقيبتي"]:
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("SELECT item_name FROM inventory WHERE guild_id = ? AND user_id = ?", (str(guild_id), str(user_id)))
-            items = cursor.fetchall()
-            conn.close()
+            cursor = inventory_collection.find({"guild_id": str(guild_id), "user_id": str(user_id)})
+            items = await cursor.to_list(length=100)
             
-            pts = get_user_points(guild_id, user_id)
+            pts = await get_user_points(guild_id, user_id)
             embed = discord.Embed(title=f"🎒 حقيبة الممتلكات لـ {message.author.name}", color=discord.Color.purple())
             embed.add_field(name="💰 رصيد النقاط", value=f"`{pts}` نقطة", inline=False)
             
             if items:
-                items_list = "\n".join([f"• {item[0]}" for item in items])
+                items_list = "\n".join([f"• {item['item_name']}" for item in items])
                 embed.add_field(name="📦 الأغراض والممتلكات", value=items_list, inline=False)
             else:
                 embed.add_field(name="📦 الأغراض والممتلكات", value="حقيبتك فارغة حالياً! استخدم `اسعار` ثم `شراء [رقم]`.", inline=False)
@@ -251,24 +237,18 @@ class InteractiveGamesCog(commands.Cog):
             if not item_to_sell:
                 return await message.channel.send("❌ يرجى كتابة اسم الغرض الذي تريد بيعه (مثال: بيع سيف الأساطير)", delete_after=5)
             
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("SELECT rowid FROM inventory WHERE guild_id = ? AND user_id = ? AND item_name LIKE ?", (str(guild_id), str(user_id), f"%{item_to_sell}%"))
-            row = cursor.fetchone()
+            item_doc = await inventory_collection.find_one({"guild_id": str(guild_id), "user_id": str(user_id), "item_name": {"$regex": item_to_sell, "$options": "i"}})
             
-            if not row:
-                conn.close()
+            if not item_doc:
                 return await message.channel.send(f"❌ ليس لديك غرض بهذا الاسم في حقيبتك!", delete_after=5)
             
-            cursor.execute("DELETE FROM inventory WHERE rowid = ?", (row[0],))
-            conn.commit()
-            conn.close()
+            await inventory_collection.delete_one({"_id": item_doc["_id"]})
             
             refund = 75
-            new_pts = add_points(guild_id, user_id, refund)
+            new_pts = await add_points(guild_id, user_id, refund)
             return await message.channel.send(f"✅ تم بيع الغرض بنجاح واسترداد **{refund} نقطة**! رصيدك الحالي: `{new_pts}`")
 
-        # 7. أمر إعطاء النقاط (خاص بمالك السيرفر) - مع دعم `نرد @شخص مبلغ` أو `تحدي @شخص`
+        # 7. أمر إعطاء النقاط (خاص بمالك السيرفر)
         if text.startswith("نقاط ") or text.startswith("!نقاط ") or text.startswith("/نقاط "):
             if message.author.id != message.guild.owner_id:
                 return await message.channel.send("❌ هذا الأمر مخصص لمالك السيرفر فقط!", delete_after=5)
@@ -283,7 +263,7 @@ class InteractiveGamesCog(commands.Cog):
             except ValueError:
                 return await message.channel.send("❌ يرجى كتابة رقم صحيح للمبلغ.", delete_after=5)
             
-            new_tot = add_points(guild_id, target_user.id, amount)
+            new_tot = await add_points(guild_id, target_user.id, amount)
             await message.channel.send(f"✅ تم إضافة **{amount}** نقطة بنجاح إلى {target_user.mention}!\nرصيده الحالي: `{new_tot}` نقطة.")
             return
 
@@ -306,8 +286,8 @@ class InteractiveGamesCog(commands.Cog):
                     mins, secs = divmod(rem, 60)
                     return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** لتحدي النرد مرة أخرى!", delete_after=5)
 
-                user_pts = get_user_points(guild_id, user_id)
-                target_pts = get_user_points(guild_id, target_user.id)
+                user_pts = await get_user_points(guild_id, user_id)
+                target_pts = await get_user_points(guild_id, target_user.id)
 
                 if user_pts < amount or target_pts < amount:
                     return await message.channel.send(f"❌ أحد الطرفين لا يملك نقاط كافية لرهان بقيمة `{amount}` نقطة!", delete_after=5)
@@ -321,12 +301,12 @@ class InteractiveGamesCog(commands.Cog):
                     r2 = random.randint(1, 6)
                     
                     if r1 > r2:
-                        add_points(guild_id, target_user.id, -amount)
-                        new_p = add_points(guild_id, user_id, amount)
+                        await add_points(guild_id, target_user.id, -amount)
+                        new_p = await add_points(guild_id, user_id, amount)
                         await message.channel.send(f"🏆 النرد أسفر عن: ({message.author.name}: `{r1}` VS {target_user.name}: `{r2}`).\nفاز {message.author.mention} وربح `{amount}` نقطة! رصيده الجديد: `{new_p}`")
                     elif r2 > r1:
-                        add_points(guild_id, user_id, -amount)
-                        new_p = add_points(guild_id, target_user.id, amount)
+                        await add_points(guild_id, user_id, -amount)
+                        new_p = await add_points(guild_id, target_user.id, amount)
                         await message.channel.send(f"🏆 النرد أسفر عن: ({message.author.name}: `{r1}` VS {target_user.name}: `{r2}`).\nفاز {target_user.mention} وربح `{amount}` نقطة! رصيده الجديد: `{new_p}`")
                     else:
                         await message.channel.send(f"🤝 تعادل في النرد (`{r1}` مقابل `{r2}`)! لم يتم خصم أو إضافة نقاط.")
@@ -334,7 +314,7 @@ class InteractiveGamesCog(commands.Cog):
                     await message.channel.send(f"⌛ انتهى الوقت ولم يقبل {target_user.mention} التحدي.")
                 return
 
-        # 9. حل مشكلة أمر التحدي المباشر بين لاعبين (مثال: تحدي @شخص)
+        # 9. حل مشكلة أمر التحدي المباشر بين لاعبين
         if text.startswith("تحدي "):
             if message.mentions:
                 target_user = message.mentions[0]
@@ -354,17 +334,17 @@ class InteractiveGamesCog(commands.Cog):
                     winner = random.choice([message.author, target_user])
                     loser = target_user if winner == message.author else message.author
                     
-                    add_points(guild_id, loser.id, -30)
-                    new_win_pts = add_points(guild_id, winner.id, 50)
+                    await add_points(guild_id, loser.id, -30)
+                    new_win_pts = await add_points(guild_id, winner.id, 50)
                     
                     await message.channel.send(f"🔥 اشتعلت المعركة بين المحاربين!\n👑 البطل الفائز: {winner.mention} وحصل على **+50 نقطة** (رصيده: {new_win_pts})\n💀 الخاسر: {loser.mention} وخسر **-30 نقطة**.")
                 except asyncio.TimeoutError:
                     await message.channel.send(f"⌛ انتهى الوقت ولم يستجب {target_user.mention} للتحدي.")
                 return
 
-        # --- الألعاب التفاعلية الحماسية الجديدة (خيارات وأزرار تفاعلية ممتعة مثل الصيد والكنز والأسئلة) ---
+        # --- الألعاب التفاعلية الحماسية بأزرار خيارات متعددة ---
 
-        # 1. لعبة الصيد التفاعلية (بأزرار خيارات متعددة)
+        # 1. لعبة الصيد والتنقيب
         if text == "كنز" or text == "صيد":
             rem = self.check_cooldown(user_id, "صيد")
             if rem > 0:
@@ -389,26 +369,26 @@ class InteractiveGamesCog(commands.Cog):
             chosen = view.value
             if "سمكة صغيرة" in chosen:
                 reward = random.choice([20, 35, 40])
-                pts = add_points(guild_id, user_id, reward)
+                pts = await add_points(guild_id, user_id, reward)
                 res_desc = f" لقد اصطدت **سمكة صغيرة لذيذة**! ربحت **+{reward} نقطة** (رصيدك: {pts})"
             elif "قرش متوحش" in chosen:
                 reward = random.choice([70, 100, 120])
-                pts = add_points(guild_id, user_id, reward)
+                pts = await add_points(guild_id, user_id, reward)
                 res_desc = f" هجم عليك قرش شرس لكنك سيطرت عليه وصطدته! كنز كبير ربحت **+{reward} نقطة** (رصيدك: {pts})"
             elif "صندوق كنز ذهبي" in chosen:
                 reward = random.choice([150, 200, 250])
-                pts = add_points(guild_id, user_id, reward)
+                pts = await add_points(guild_id, user_id, reward)
                 res_desc = f" يا له من حظ أسطوري! وجدت **صندوق كنز ذهبي** مغطى بالمجوهرات! ربحت **+{reward} نقطة** (رصيدك: {pts})"
             else:
                 loss = 15
-                pts = add_points(guild_id, user_id, -loss)
+                pts = await add_points(guild_id, user_id, -loss)
                 res_desc = f" للأسف... اصطدت **حذاءً قديماً متهالكاً** وضاعت تعبك (-{loss} نقطة، رصيدك: {pts})"
 
             try: await msg.edit(content=f"🎣 **نتيجة الصيد:**{res_desc}", embed=None, view=None)
             except: await message.channel.send(f"🎣 **نتيجة الصيد:**{res_desc}")
             return
 
-        # 2. لعبة النرد السريع بالتفاعل الأزرار
+        # 2. لعبة النرد السريع
         if text == "نرد":
             rem = self.check_cooldown(user_id, "نرد")
             if rem > 0:
@@ -432,7 +412,7 @@ class InteractiveGamesCog(commands.Cog):
             user_won = (user_choice_high and is_high) or (not user_choice_high and not is_high)
 
             if user_won:
-                pts = add_points(guild_id, user_id, 50)
+                pts = await add_points(guild_id, user_id, 50)
                 result_text = f"🎉 طلع النرد (`{roll}`). توقعك كان صحيحاً تماماً! **ربحت 50 نقطة** (رصيدك: {pts})"
             else:
                 result_text = f"❌ طلع النرد (`{roll}`). توقعك كان خاطئاً، حظاً أوفر في المرة القادمة!"
@@ -441,7 +421,7 @@ class InteractiveGamesCog(commands.Cog):
             except: await message.channel.send(result_text)
             return
 
-        # 3. لعبة الحظ أو الروليت بالأبواب الثلاثة والأزرار التفاعلية
+        # 3. عجلة الحظ والأبواب
         elif text in ["حظ", "روليت"]:
             rem = self.check_cooldown(user_id, "حظ")
             if rem > 0:
@@ -460,7 +440,7 @@ class InteractiveGamesCog(commands.Cog):
                 return await message.channel.send("⌛ انتهى الوقت ولم تختر الباب المناسب!")
 
             reward = random.choice([60, 120, -30, 180, 0, 90])
-            pts = add_points(guild_id, user_id, reward)
+            pts = await add_points(guild_id, user_id, reward)
             if reward > 0:
                 res_text = f"✨ فتحت {view.value} ووجدات خلفه كنزاً بقيمة **+{reward} نقطة**! رصيدك: `{pts}`"
             elif reward < 0:
@@ -472,12 +452,12 @@ class InteractiveGamesCog(commands.Cog):
             except: await message.channel.send(res_text)
             return
 
-        # 4. حجرة ورقة مقص بالأزرار التفاعلية
+        # 4. حجرة ورقة مقص
         elif text in ["مقص", "حجر ورقة مقص"]:
             rem = self.check_cooldown(user_id, "مقص")
             if rem > 0:
                 mins, secs = divmod(rem, 60)
-                return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للعب (حجرة ورقة مقص) مرة أخرى!", delete_after=5)
+                return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للعب مرة أخرى!", delete_after=5)
 
             options = ["حجر 🪨", "ورقة 📄", "مقص ✂️"]
             view = GameChoiceView(options, user_id)
@@ -496,7 +476,7 @@ class InteractiveGamesCog(commands.Cog):
             if choice == bot_choice:
                 res_text = f"🤝 اختيارك ({choice}) والبوت اختر ({bot_choice}) -> **تعادل تماماً!**"
             elif (choice == "حجر" and bot_choice == "مقص") or (choice == "ورقة" and bot_choice == "حجر") or (choice == "مقص" and bot_choice == "ورقة"):
-                pts = add_points(guild_id, user_id, 60)
+                pts = await add_points(guild_id, user_id, 60)
                 res_text = f"🎉 اختيارك ({choice}) والبوت اختر ({bot_choice}) -> **فزت بجدارة وربحت 60 نقطة!** (رصيدك: {pts})"
             else:
                 res_text = f"❌ اختيارك ({choice}) والبوت اختر ({bot_choice}) -> **للأسف خسرت أمام ذكاء البوت!**"
@@ -505,7 +485,7 @@ class InteractiveGamesCog(commands.Cog):
             except: await message.channel.send(res_text)
             return
 
-        # 5. باقي الألعاب الـ 22 الأخرى (أصبحت تفاعلية تماماً بأزرار خيارات متعددة وأسئلة متنوعة تحمس الناس)
+        # 5. باقي الألعاب الـ 22 بأزرار وأسئلة تفاعلية
         elif text in [g["cmd"] for g in GAMES_LIST]:
             game_obj = next(g for g in GAMES_LIST if g["cmd"] == text)
             game_name = game_obj["name"]
@@ -515,7 +495,6 @@ class InteractiveGamesCog(commands.Cog):
                 mins, secs = divmod(rem, 60)
                 return await message.channel.send(f"⏳ انتظر **{mins} دقيقة و {secs} ثانية** للعب ({game_name}) مرة أخرى!", delete_after=5)
 
-            # أسئلة وخيارات عشوائية حماسية تفاعلية لكل الألعاب
             questions_bank = [
                 {"q": "ما هي عاصمة دولة فرنسا؟", "options": ["باريس", "لندن", "برلين", "روما"], "ans": "باريس"},
                 {"q": "كم عدد كواكب المجموعة الشمسية؟", "options": ["8 كواكب", "9 كواكب", "7 كواكب", "10 كواكب"], "ans": "8 كواكب"},
@@ -543,7 +522,7 @@ class InteractiveGamesCog(commands.Cog):
 
             if view.value == q_data["ans"]:
                 reward = random.randint(40, 90)
-                total = add_points(guild_id, user_id, reward)
+                total = await add_points(guild_id, user_id, reward)
                 res_text = f"🏆 إجابة خارقة وصحيحة يا {message.author.mention}! اجتزت تحدي **{game_name}** بنجاح وربحت **+{reward} نقطة**! رصيدك الحالي: `{total}`"
             else:
                 res_text = f"❌ إجابة خاطئة! الإجابة الصحيحة كانت: **{q_data['ans']}**. حظاً أوفر في المرات القادمة!"
