@@ -178,49 +178,56 @@ async def set_top(ctx):
     save_config_key(ctx.guild.id, "top_channel", ctx.channel.id)
     await ctx.send("✅ تم تعيين قناة **التوب** بنجاح!")
 
+# --- أمر نقاطي (تم تحويله لأمر رسمي صحيح) ---
+@bot.command(name="نقاطي")
+async def my_points(ctx):
+    if not ctx.guild:
+        return
+    guild_id = str(ctx.guild.id)
+    user_id = str(ctx.author.id)
+    data = get_user_data(guild_id, user_id)
+    await ctx.send(f"💰 رصيدك الحالي يا {ctx.author.mention}: **{data.get('points', 0)}** نقطة.")
+
+# --- أمر التوب (تم تحويله لأمر رسمي مع دعم الاختصارات) ---
+@bot.command(name="top", aliases=["tوب", "التوب"])
+async def leaderboard(ctx):
+    if not ctx.guild:
+        return
+    guild_id = str(ctx.guild.id)
+    config = get_config(guild_id)
+
+    if config.get("top_channel") and ctx.channel.id != config["top_channel"]:
+        await ctx.message.delete()
+        return
+
+    if users_collection is not None:
+        top_users_cursor = users_collection.find({"guild_id": guild_id}).sort("points", -1).limit(10)
+        top_users = [(doc.get("user_id"), doc.get("points", 0)) for doc in top_users_cursor]
+    else:
+        top_users = []
+
+    embed = discord.Embed(title="🏆 قائمة لوحة الشرف (Top 10)", description="أكثر الأعضاء جمعاً للنقاط في السيرفر:", color=discord.Color.gold())
+    
+    if not top_users:
+        embed.description = "لا توجد أي بيانات مسجلة حتى الآن."
+    else:
+        description_lines = []
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+        for index, (u_id, pts) in enumerate(top_users):
+            member = ctx.guild.get_member(int(u_id))
+            name = member.display_name if member else f"مغادر ({u_id})"
+            medal = medals[index] if index < len(medals) else f"•"
+            description_lines.append(f"{medal} **{name}** — `{pts}` نقطة")
+        embed.description = "\n".join(description_lines)
+
+    await ctx.send(embed=embed)
+
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
         return
-
-    text = message.content.strip()
-    text_lower = text.lower()
-    guild_id = str(message.guild.id)
-    user_id = str(message.author.id)
-    config = get_config(guild_id)
-
-    if text_lower == "نقاطي":
-        data = get_user_data(guild_id, user_id)
-        await message.channel.send(f"💰 رصيدك الحالي يا {message.author.mention}: **{data.get('points', 0)}** نقطة.")
-
-    elif text_lower in ["tوب", "!top", "top"]:
-        if config.get("top_channel") and message.channel.id != config["top_channel"]:
-            await message.delete()
-            return
-
-        if users_collection is not None:
-            top_users_cursor = users_collection.find({"guild_id": guild_id}).sort("points", -1).limit(10)
-            top_users = [(doc.get("user_id"), doc.get("points", 0)) for doc in top_users_cursor]
-        else:
-            top_users = []
-
-        embed = discord.Embed(title="🏆 قائمة لوحة الشرف (Top 10)", description="أكثر الأعضاء جمعاً للنقاط في السيرفر:", color=discord.Color.gold())
-        
-        if not top_users:
-            embed.description = "لا توجد أي بيانات مسجلة حتى الآن."
-        else:
-            description_lines = []
-            medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-            for index, (u_id, pts) in enumerate(top_users):
-                member = message.guild.get_member(int(u_id))
-                name = member.display_name if member else f"مغادر ({u_id})"
-                medal = medals[index] if index < len(medals) else f"•"
-                description_lines.append(f"{medal} **{name}** — `{pts}` نقطة")
-            embed.description = "\n".join(description_lines)
-
-        await message.channel.send(embed=embed)
-
-    # الأهم: هذا السطر هو الذي يجبر البوت على إرسال الرسائل لملفات الـ Cogs لتشغيل الألعاب
+    
+    # معالجة بقية الأوامر والـ Cogs والألعاب
     await bot.process_commands(message)
 
 if __name__ == "__main__":
