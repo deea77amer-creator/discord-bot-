@@ -8,6 +8,24 @@ from datetime import datetime, timedelta
 
 DB_FILE = "database.db"
 
+# دالة لضمان إنشاء جدول المستخدمين تلقائياً وحفظ النقاط وعدم تصفيرها
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            guild_id TEXT,
+            user_id TEXT,
+            points INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# تشغيل دالة إنشاء الجدول فور قراءة الملف
+init_db()
+
 # قاموس لتتبع وقت آخر تداول واستثمار وباقي الأوامر لكل مستخدم (Cooldown: دقيقتين)
 market_cooldowns = {}
 # أسعار الأصول المتغيرة كل 3 دقائق
@@ -138,6 +156,7 @@ class MarketCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.target_channel_id = 1528917497246515221
+        init_db()
 
     def set_cooldown(self, user_id, action_type):
         market_cooldowns[(user_id, action_type)] = datetime.now() + timedelta(minutes=2)
