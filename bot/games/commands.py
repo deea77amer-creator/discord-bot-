@@ -1,25 +1,24 @@
-    @bot.command(name="اوامر", aliases=["help", "الأوامر", "commands"])
-    async def custom_help(ctx):
-        """عرض جميع الأوامر المتاحة في البوت تلقائياً"""
-        embed = discord.Embed(
-            title="📜 قائمة أوامر البوت",
-            description="جميع الأوامر المتاحة حالياً في السيرفر (تتحدث تلقائياً عند إضافة أي أمر جديد):",
-            color=discord.Color.blue()
-        )
+import discord
+from discord import app_commands
+
+ALLOWED_CHANNEL_ID = 1528588181371490344
+
+@app_commands.command(name="الأوامر", description="عرض جميع الأوامر المتاحة في المتجر")
+async def help_command(interaction: discord.Interaction):
+    if interaction.channel_id != ALLOWED_CHANNEL_ID:
+        await interaction.response.send_message(f"عذراً، لا يمكنك استخدام هذا الأمر إلا في قناة المتجر المخصصة.", ephemeral=True)
+        return
         
-        # تجميع الأوامر المتاحة وترتيبها
-        commands_list = []
-        for command in bot.commands:
-            # تخفيض الأوامر المخفية أو الأوامر النظامية إذا أردت
-            if not command.hidden:
-                # جلب اسم الأمر ووصفه إن وجد
-                desc = command.help or "لا يوجد وصف"
-                commands_list.append(f"• **`{command.name}`** : {desc}")
-        
-        if commands_list:
-            embed.add_field(name="✨ الأوامر المتوفرة", value="\n".join(commands_list), inline=False)
-        else:
-            embed.description = "لا توجد أوامر مسجلة حالياً."
-            
-        embed.set_footer(text=f"مطلوب بواسطة {ctx.author.name}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-        await ctx.send(embed=embed)
+    embed = discord.Embed(
+        title="📜 قائمة أوامر المتجر",
+        description="الأوامر المتاحة حالياً في القناة:",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(name="/المتجر", value="عرض قائمة الأغراض المتاحة في المتجر", inline=False)
+    embed.add_field(name="/شراء [معرف_الغرض]", value="شراء غرض من المتجر باستخدام معرفه", inline=False)
+    embed.add_field(name="/بيع [معرف_الغرض]", value="بيع غرض تمتلكه واسترداد نقاطه", inline=False)
+    
+    embed.set_footer(text=f"مطلوب بواسطة {interaction.user.name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
