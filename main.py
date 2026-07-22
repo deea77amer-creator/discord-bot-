@@ -36,36 +36,39 @@ class MyBot(commands.Bot):
         await setup_commands(self)
         print("تم تفعيل وتثبيت جميع الأوامر الخارجية بنجاح!")
 
-        # تحميل الملفات تلقائياً من مجلد cogs إن وجد
-        if os.path.exists('./cogs'):
-            for filename in os.listdir('./cogs'):
-                if filename.endswith('.py'):
-                    cog_name = f'cogs.{filename[:-3]}'
+        # --- [التعديل الجذري] التحميل التلقائي الشامل لأي مجلد أو ملف خارجي ---
+        # سنقوم بالبحث في المجلد الحالي وجلب كل المجلدات والملفات تلقائياً
+        for root, dirs, files in os.walk("."):
+            # استثناء المجلدات المخفية أو مجلدات البيئة الافتراضية لعدم حدوث أخطاء
+            if any(p.startswith('.') or p in ['__pycache__', 'venv', 'env'] for p in root.split(os.sep)):
+                continue
+                
+            for filename in files:
+                if filename.endswith('.py') and filename != "main.py":
+                    # بناء المسار الصحيح للموديول بصيغة بايثون (مثلاً bot.games.shop أو cogs.test)
+                    rel_path = os.path.relpath(os.path.join(root, filename), ".")
+                    module_path = rel_path[:-3].replace(os.sep, ".")
+                    
                     try:
-                        await self.load_extension(cog_name)
-                        print(f"تم تحميل الملف بنجاح: {filename}")
+                        await self.load_extension(module_path)
+                        print(f"✨ [تحميل تلقائي] تم تحميل الملف بنجاح: {module_path}")
                     except commands.errors.ExtensionAlreadyLoaded:
                         pass
-
-        # تحميل الملفات من مجلد الألعاب bot/games تلقائياً
-        games_paths = ['./bot/games', './games']
-        loaded_games = False
-        for path in games_paths:
-            if os.path.exists(path):
-                for filename in os.listdir(path):
-                    if filename.endswith('.py'):
-                        prefix = path.replace('./', '').replace('/', '.')
-                        cog_name = f"{prefix}.{filename[:-3]}"
-                        try:
-                            await self.load_extension(cog_name)
-                            print(f"تم تحميل ملف الألعاب/السوق بنجاح: {filename}")
-                            loaded_games = True
-                        except Exception as e:
-                            print(f"فشل تحميل {filename}: {e}")
-                if loaded_games:
-                    break
+                    except commands.errors.NoEntryPointError:
+                        # في حال كان الملف عبارة عن دوال عادية ولا يحتوي على دالة setup
+                        pass
+                    except Exception as e:
+                        # طباعة الخطأ بهدوء دون إيقاف البوت لكي يكمل تحميل باقي الملفات
+                        print(f"⚠️ تخطي الملف {module_path}: {e}")
 
     async def on_ready(self):
+        # --- [تعديل إضافي آمن] مزامنة الأوامر تلقائياً لكي تظهر في ديسكورد فوراً ---
+        try:
+            synced = await self.tree.sync()
+            print(f"🌐 تم مزامنة {len(synced)} أمر (Slash Commands) بنجاح.")
+        except Exception as e:
+            print(f"خطأ في مزامنة الأوامر: {e}")
+            
         print(f"البوت جاهز ومتصل بقاعدة البيانات السحابية MongoDB باسم: {self.user}")
 
 bot = MyBot()
