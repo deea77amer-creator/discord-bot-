@@ -36,30 +36,7 @@ class MyBot(commands.Bot):
         await setup_commands(self)
         print("تم تفعيل وتثبيت جميع الأوامر الخارجية بنجاح!")
 
-        # --- [التعديل الجذري] التحميل التلقائي الشامل لأي مجلد أو ملف خارجي ---
-        # سنقوم بالبحث في المجلد الحالي وجلب كل المجلدات والملفات تلقائياً
-        for root, dirs, files in os.walk("."):
-            # استثناء المجلدات المخفية أو مجلدات البيئة الافتراضية لعدم حدوث أخطاء
-            if any(p.startswith('.') or p in ['__pycache__', 'venv', 'env'] for p in root.split(os.sep)):
-                continue
-                
-            for filename in files:
-                if filename.endswith('.py') and filename != "main.py":
-                    # بناء المسار الصحيح للموديول بصيغة بايثون (مثلاً bot.games.shop أو cogs.test)
-                    rel_path = os.path.relpath(os.path.join(root, filename), ".")
-                    module_path = rel_path[:-3].replace(os.sep, ".")
-                    
-                    try:
-                        await self.load_extension(module_path)
-                        print(f"✨ [تحميل تلقائي] تم تحميل الملف بنجاح: {module_path}")
-                    except commands.errors.ExtensionAlreadyLoaded:
-                        pass
-                    except commands.errors.NoEntryPointError:
-                        # في حال كان الملف عبارة عن دوال عادية ولا يحتوي على دالة setup
-                        pass
-                    except Exception as e:
-                        # طباعة الخطأ بهدوء دون إيقاف البوت لكي يكمل تحميل باقي الملفات
-                        print(f"⚠️ تخطي الملف {module_path}: {e}")
+        # --- [تم إلغاء التحميل التلقائي العشوائي لمنع ظهور الأوامر غير المرغوبة] ---
 
     async def on_ready(self):
         # --- [تعديل إضافي آمن] مزامنة الأوامر تلقائياً لكي تظهر في ديسكورد فوراً ---
@@ -177,7 +154,7 @@ async def set_welcome(ctx):
     await ctx.send("✅ تم تعيين قناة **الترحيب** بنجاح!")
 
 @bot.command(name="تحديد_الخروج")
-@commands.has_permissions(administrator=True)
+@commands.has_permissions(administrator=`True`)
 async def set_leave(ctx):
     save_config_key(ctx.guild.id, "leave_channel", ctx.channel.id)
     await ctx.send("✅ تم تعيين قناة **الخروج** بنجاح!")
@@ -219,6 +196,7 @@ async def on_message(message):
     await bot.process_commands(message)
 
 if __name__ == "__main__":
+    token = os.getenv("DISCORD_TOKEN")
     token = os.getenv("DISCORD_TOKEN")
     if token:
         keep_alive()  # تشغيل سيرفر الـ Flask أولاً في الخلفية
