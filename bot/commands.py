@@ -1,13 +1,14 @@
 import discord
 from discord.ext import commands
 
-ALLOWED_CHANNEL_ID = 1528917497246515221
+# آيديهات القناتين المسموح فيها استخدام الأمر
+ALLOWED_CHANNEL_IDS = [1528917497246515221, 1528588181371490344]
 
 async def setup_commands(bot):
-    @bot.command(name="اوامر", aliases=["الأوامر", "help", "commands"])
+    @bot.command(name="اوامر")
     async def help_command(ctx):
-        if ctx.channel.id != ALLOWED_CHANNEL_ID:
-            await ctx.send(f"عذراً {ctx.author.mention}، لا يمكنك استخدام هذا الأمر إلا في قناة المتجر المخصصة.", delete_after=5)
+        if ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+            await ctx.send(f"عذراً {ctx.author.mention}، لا يمكنك استخدام هذا الأمر إلا في قنوات المتاجر المخصصة.", delete_after=5)
             return
             
         embed = discord.Embed(
