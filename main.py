@@ -36,10 +36,7 @@ class MyBot(commands.Bot):
         await setup_commands(self)
         print("تم تفعيل وتثبيت جميع الأوامر الخارجية بنجاح!")
 
-        # --- [تم إلغاء التحميل التلقائي العشوائي لمنع ظهور الأوامر غير المرغوبة] ---
-
     async def on_ready(self):
-        # --- [تعديل إضافي آمن] مزامنة الأوامر تلقائياً لكي تظهر في ديسكورد فوراً ---
         try:
             synced = await self.tree.sync()
             print(f"🌐 تم مزامنة {len(synced)} أمر (Slash Commands) بنجاح.")
@@ -154,10 +151,10 @@ async def set_welcome(ctx):
     await ctx.send("✅ تم تعيين قناة **الترحيب** بنجاح!")
 
 @bot.command(name="تحديد_الخروج")
-@commands.has_permissions(administrator=`True`)
+@commands.has_permissions(administrator=True)
 async def set_leave(ctx):
     save_config_key(ctx.guild.id, "leave_channel", ctx.channel.id)
-    await ctx.send("✅ تم تعيين قناة **الخروج** بنجاح!")
+    await ctx.send("✅ تم تعيين قناة **تحديد_الخروج** بنجاح!")
 
 @bot.command(name="تحديد_الألعاب")
 @commands.has_permissions(administrator=True)
@@ -191,15 +188,12 @@ async def my_points(ctx):
 async def on_message(message):
     if message.author.bot or not message.guild:
         return
-    
-    # معالجة الأوامر والملفات الخارجية
     await bot.process_commands(message)
 
 if __name__ == "__main__":
     token = os.getenv("DISCORD_TOKEN")
-    token = os.getenv("DISCORD_TOKEN")
     if token:
-        keep_alive()  # تشغيل سيرفر الـ Flask أولاً في الخلفية
-        bot.run(token) # تشغيل البوت
+        keep_alive()
+        bot.run(token)
     else:
         print("خطأ: التوكن غير موجود!")
